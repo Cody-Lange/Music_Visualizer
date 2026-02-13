@@ -62,6 +62,8 @@ Pre-built templates give users a starting point. Each template defines the visua
 | **Nature** | Organic flows + fractal patterns + earth tones | Folk, acoustic, world music |
 | **Abstract** | Shader-based generative art | Experimental, jazz, classical |
 | **Urban** | Glitch effects + typography + concrete textures | Rap, grime, trap |
+| **Glitchbreak** | VHS corruption + neon-on-black + broken grids + RGB splitting + chaotic jitter | Breakcore, IDM, Sewerslvt, drum & bass, hardcore electronic |
+| **90s Anime** | Speed lines + concentric energy rings + warm amber/pink sunset palette + starfield + cel-shaded orb | J-pop, city pop, lo-fi, vaporwave, anime OSTs |
 
 Templates are fully customizable — they serve as a starting point that the LLM can suggest modifications to.
 

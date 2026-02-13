@@ -138,5 +138,7 @@ class RenderService:
             "nature": "0x2D5016",
             "abstract": "0x12121A",
             "urban": "0x333333",
+            "glitchbreak": "0xFF0066",
+            "90s-anime": "0xFF8844",
         }
         return colors.get(template, "0x0A0A0F")

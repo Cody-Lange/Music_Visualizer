@@ -104,7 +104,7 @@ Music_Visualizer/
 5. **Real-time preview** — procedural beat-synced visuals in browser (Three.js/Canvas)
 6. **Production render** — Remotion-based MP4 generation with AI keyframes
 7. **Post-render editing** — natural language edit requests → incremental re-renders
-8. **Visual templates** — Nebula, Geometric, Waveform, Cinematic, Retro, Nature, Abstract, Urban
+8. **Visual templates** — Nebula, Geometric, Waveform, Cinematic, Retro, Nature, Abstract, Urban, Glitchbreak, 90s Anime
 9. **Export presets** — YouTube (16:9), TikTok/Reels (9:16), Instagram (1:1), Twitter, 4K, custom
 10. **Timeline editor** — zoomable waveform, draggable beat/section markers, lyrics track, keyframe thumbnails
 11. **Vocal separation** — Demucs for isolating vocals before transcription

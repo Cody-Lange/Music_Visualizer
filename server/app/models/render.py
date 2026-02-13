@@ -4,7 +4,8 @@ from pydantic import BaseModel, Field
 
 
 VisualTemplate = Literal[
-    "nebula", "geometric", "waveform", "cinematic", "retro", "nature", "abstract", "urban"
+    "nebula", "geometric", "waveform", "cinematic", "retro", "nature", "abstract", "urban",
+    "glitchbreak", "90s-anime",
 ]
 MotionStyle = Literal[
     "slow-drift", "pulse", "energetic", "chaotic", "breathing", "glitch", "smooth-flow", "staccato"

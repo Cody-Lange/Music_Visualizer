@@ -11,7 +11,7 @@ A web application that takes an audio file and a user prompt, analyzes the music
 - **Real-Time Preview** — Procedural beat-synced visuals in the browser (Three.js / WebGL)
 - **Production Render** — Remotion-based MP4 generation with AI keyframes
 - **Post-Render Editing** — Natural language edit requests with incremental re-renders
-- **8 Visual Templates** — Nebula, Geometric, Waveform, Cinematic, Retro, Nature, Abstract, Urban
+- **10 Visual Templates** — Nebula, Geometric, Waveform, Cinematic, Retro, Nature, Abstract, Urban, Glitchbreak, 90s Anime
 - **Export Presets** — YouTube (16:9), TikTok/Reels (9:16), Instagram (1:1), Twitter, 4K, custom
 - **Timeline Editor** — Zoomable waveform, draggable beat/section markers, lyrics track
 - **Vocal Separation** — Demucs for isolating vocals before transcription

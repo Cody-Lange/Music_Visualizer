@@ -56,6 +56,8 @@ class TestTemplateBaseColor:
         assert RenderService._template_base_color("nebula") == "0x1B1464"
         assert RenderService._template_base_color("retro") == "0xFF00FF"
         assert RenderService._template_base_color("urban") == "0x333333"
+        assert RenderService._template_base_color("glitchbreak") == "0xFF0066"
+        assert RenderService._template_base_color("90s-anime") == "0xFF8844"
 
     def test_unknown_template_fallback(self):
         assert RenderService._template_base_color("unknown") == "0x0A0A0F"

@@ -6,7 +6,9 @@ export type VisualTemplate =
   | "retro"
   | "nature"
   | "abstract"
-  | "urban";
+  | "urban"
+  | "glitchbreak"
+  | "90s-anime";
 
 export type MotionStyle =
   | "slow-drift"

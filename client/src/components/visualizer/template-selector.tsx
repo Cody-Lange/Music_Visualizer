@@ -10,6 +10,8 @@ const TEMPLATES: { key: VisualTemplate; label: string; emoji: string }[] = [
   { key: "nature", label: "Nature", emoji: "F" },
   { key: "abstract", label: "Abstract", emoji: "A" },
   { key: "urban", label: "Urban", emoji: "U" },
+  { key: "glitchbreak", label: "Glitchbreak", emoji: "X" },
+  { key: "90s-anime", label: "90s Anime", emoji: "S" },
 ];
 
 export function TemplateSelector() {

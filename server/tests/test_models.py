@@ -193,6 +193,12 @@ class TestRenderModels:
         assert g.lyrics_display.enabled is True
         assert g.lyrics_display.font == "sans"
 
+    def test_global_style_new_templates(self):
+        g = GlobalStyle(template="glitchbreak")
+        assert g.template == "glitchbreak"
+        g = GlobalStyle(template="90s-anime")
+        assert g.template == "90s-anime"
+
     def test_global_style_invalid_template(self):
         with pytest.raises(ValidationError):
             GlobalStyle(template="invalid_template")

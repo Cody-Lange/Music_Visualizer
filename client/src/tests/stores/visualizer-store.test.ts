@@ -21,6 +21,7 @@ describe("useVisualizerStore", () => {
     const templates = [
       "nebula", "geometric", "waveform", "cinematic",
       "retro", "nature", "abstract", "urban",
+      "glitchbreak", "90s-anime",
     ] as const;
 
     for (const template of templates) {
