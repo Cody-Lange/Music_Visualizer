@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Build output
+client/dist/
+server/data/
+*.egg-info/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Storage
+data/storage/
+*.mp4
+*.mp3
+*.wav
+*.flac
+
+# Logs
+*.log
+
+# Testing
+coverage/
+.coverage
+htmlcov/
+.pytest_cache/
