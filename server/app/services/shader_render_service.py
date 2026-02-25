@@ -134,7 +134,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         vec3(0.5), vec3(0.5), vec3(0.8, 0.5, 1.0), vec3(0.1, 0.2, 0.3));
     col *= pattern;
     col *= tunnel * 0.4;
-    col += vec3(0.2, 0.05, 0.1) * smoothstep(0.0, 1.0, u_beat);
+    col += vec3(0.1, 0.04, 0.06) * smoothstep(0.0, 1.0, u_beat);
     col += vec3(0.05) * u_treble / (r + 0.5);
     fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
 }
@@ -219,7 +219,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec3 fwd = normalize(ta - ro);
     vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
     vec3 up = cross(right, fwd);
-    vec3 rd = normalize(fwd * 1.5 + right * uv.x + up * uv.y);
+    vec3 rd = normalize(fwd * 2.0 + right * uv.x + up * uv.y);
     float t = 0.0;
     for (int i = 0; i < 80; i++) {
         float d = scene(ro + rd * t);
@@ -283,12 +283,12 @@ vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
     float angle = iTime * 0.08 + u_mid * 0.1;
-    vec3 ro = vec3(2.5 * sin(angle), 1.5 + u_bass * 0.15, 2.5 * cos(angle));
+    vec3 ro = vec3(4.0 * sin(angle), 1.5 + u_bass * 0.15, 4.0 * cos(angle));
     vec3 ta = vec3(0.0);
     vec3 fwd = normalize(ta - ro);
     vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
     vec3 up = cross(right, fwd);
-    vec3 rd = normalize(fwd * 1.8 + right * uv.x + up * uv.y);
+    vec3 rd = normalize(fwd * 2.0 + right * uv.x + up * uv.y);
     float t = 0.0;
     vec3 col = vec3(0.02, 0.01, 0.04);
     for (int i = 0; i < 100; i++) {
@@ -443,8 +443,13 @@ def _interpolate(times: list[float], values: list[float], t: float) -> float:
     return values[lo] + frac * (values[hi] - values[lo])
 
 
-def _compute_beat_intensity(beat_times: list[float], t: float, decay: float = 0.15) -> float:
-    """Compute beat intensity at time t: 1.0 on beat, exponential decay after."""
+def _compute_beat_intensity(beat_times: list[float], t: float, decay: float = 0.4) -> float:
+    """Compute beat intensity at time t: 1.0 on beat, smooth decay after.
+
+    Uses a longer decay (0.4s default, was 0.15s) for gentler, more musical
+    beat impacts.  The raw exponential is also smoothed with a cubic ease-out
+    curve to avoid the harsh initial spike.
+    """
     if not beat_times:
         return 0.0
 
@@ -458,7 +463,10 @@ def _compute_beat_intensity(beat_times: list[float], t: float, decay: float = 0.
     if best_dt == float("inf"):
         return 0.0
 
-    return math.exp(-best_dt / decay)
+    raw = math.exp(-best_dt / decay)
+    # Smooth the initial spike: cubic ease-out (less harsh transition)
+    # This turns the sharp exponential into a gentler curve
+    return raw * raw * (3.0 - 2.0 * raw)
 
 
 class ShaderRenderService:
@@ -838,10 +846,31 @@ class ShaderRenderService:
             fbo.use()
             ctx.viewport = (0, 0, width, height)
 
+            # Exponential smoothing state for audio uniforms.
+            # This low-pass filter prevents frame-to-frame jitter and
+            # creates buttery-smooth audio reactivity.
+            # Alpha = 1 - exp(-dt / tau).  tau ≈ 0.08s for bands (responsive
+            # but smooth), 0.15s for beat (slower to prevent sharp spikes),
+            # 0.1s for centroid/energy.
+            dt = 1.0 / fps
+            alpha_fast = 1.0 - math.exp(-dt / 0.08)   # ~8 frame smoothing @ 30fps
+            alpha_slow = 1.0 - math.exp(-dt / 0.15)   # ~15 frame smoothing @ 30fps
+            alpha_mid = 1.0 - math.exp(-dt / 0.10)    # ~10 frame smoothing @ 30fps
+
+            # Smoothed values (start at resting state)
+            s_bass = 0.0
+            s_low_mid = 0.0
+            s_mid = 0.0
+            s_high_mid = 0.0
+            s_treble = 0.0
+            s_energy = 0.3
+            s_beat = 0.0
+            s_centroid = 0.5
+
             for frame_idx in range(total_frames):
                 t = frame_idx / fps
 
-                # Compute audio features at this time
+                # Compute raw audio features at this time
                 rms = _interpolate(spec_times, rms_values, t) if rms_values else 0.3
                 centroid = _interpolate(spec_times, centroid_values, t) if centroid_values else 0.5
                 beat = _compute_beat_intensity(beat_times, t)
@@ -853,18 +882,33 @@ class ShaderRenderService:
                 high_mid = _interpolate(spec_times, high_mid_values, t) if high_mid_values else rms * 0.4
                 treble = _interpolate(spec_times, treble_values, t) if treble_values else rms * 0.3
 
+                # Apply exponential smoothing (EMA low-pass filter)
+                s_bass += alpha_fast * (bass - s_bass)
+                s_low_mid += alpha_fast * (low_mid - s_low_mid)
+                s_mid += alpha_fast * (mid - s_mid)
+                s_high_mid += alpha_fast * (high_mid - s_high_mid)
+                s_treble += alpha_fast * (treble - s_treble)
+                s_energy += alpha_mid * (rms - s_energy)
+                s_beat += alpha_slow * (beat - s_beat)
+                s_centroid += alpha_mid * (centroid - s_centroid)
+
+                # Clamp all audio values to [0, 0.85] to prevent
+                # extreme brightness/flash even with hot audio
+                def _clamp(v: float) -> float:
+                    return max(0.0, min(0.85, v))
+
                 # Set uniforms (only set if they exist in the shader)
                 for name, value in [
                     ("iTime", t),
                     ("iResolution", (float(width), float(height))),
-                    ("u_bass", bass),
-                    ("u_lowMid", low_mid),
-                    ("u_mid", mid),
-                    ("u_highMid", high_mid),
-                    ("u_treble", treble),
-                    ("u_energy", rms),
-                    ("u_beat", beat),
-                    ("u_spectralCentroid", centroid),
+                    ("u_bass", _clamp(s_bass)),
+                    ("u_lowMid", _clamp(s_low_mid)),
+                    ("u_mid", _clamp(s_mid)),
+                    ("u_highMid", _clamp(s_high_mid)),
+                    ("u_treble", _clamp(s_treble)),
+                    ("u_energy", _clamp(s_energy)),
+                    ("u_beat", _clamp(s_beat)),
+                    ("u_spectralCentroid", _clamp(s_centroid)),
                 ]:
                     if name in prog:
                         if isinstance(value, tuple):

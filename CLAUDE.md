@@ -185,9 +185,15 @@ The server-side shader pipeline runs on ModernGL with the host GPU's GLSL compil
 
 7. **LLM prompt guardrails** — `SHADER_SYSTEM_PROMPT` has an explicit "NVIDIA COMPATIBILITY" section forbidding void constructors, `hash`/`noise` as names, `return void`, bare integer literals, and `%` on floats. All generation and fix prompts reinforce these rules with 4 advanced examples.
 
+8. **Missing `mainImage` entry point** — The LLM sometimes generates code without any entry point (`void main()` or `void mainImage()`). The sanitizer has a multi-tier fallback: (a) rename `void main()` / `void main(void)` → `mainImage`, (b) fix near-miss signatures (wrong param names/qualifiers), (c) rename any `void foo(out vec4, in vec2)` → `mainImage`, (d) wrap bare `fragColor =` code in a synthesized `mainImage`. See `sanitize_shader_code()`.
+
+9. **Excessive zoom / narrow FOV** — LLM-generated shaders often use tight focal lengths (e.g. `normalize(vec3(uv, 0.5))`) making scenes look extremely zoomed in. The sanitizer (`_fix_narrow_fov`) enforces a minimum focal length of 1.8 for both simple and lookat camera patterns. System prompt rules and all examples use FOV ≥ 2.0 and camera distances ≥ 3.0.
+
+10. **Abrupt beat flashes** — Raw beat intensity had sharp spikes (decay τ=0.15s). Now uses τ=0.4s with cubic smoothstep curve in `_compute_beat_intensity()`. All audio uniforms are run through an exponential moving average (EMA) low-pass filter in the render loop (`_render_blocking`) and clamped to [0, 0.85]. LLM prompt limits beat additive to `vec3(0.08)` maximum.
+
 If shaders still fail to compile on NVIDIA, the relevant files are:
-- `server/app/services/llm_service.py` — `SHADER_SYSTEM_PROMPT`, `sanitize_shader_code()`, `_strip_void_expressions()`, `_rename_nvidia_reserved()`, `_fix_int_literals_in_constructors()`, `_fix_modulo_on_floats()`
-- `server/app/services/shader_render_service.py` — `_nvidia_static_check()`, `_try_compile()`
+- `server/app/services/llm_service.py` — `SHADER_SYSTEM_PROMPT`, `sanitize_shader_code()`, `_strip_void_expressions()`, `_rename_nvidia_reserved()`, `_fix_int_literals_in_constructors()`, `_fix_modulo_on_floats()`, `_fix_narrow_fov()`
+- `server/app/services/shader_render_service.py` — `_nvidia_static_check()`, `_try_compile()`, `_compute_beat_intensity()`
 - `server/app/api/shader.py` — `_generate_and_validate()` retry pipeline
 
 ### Shader Architecture

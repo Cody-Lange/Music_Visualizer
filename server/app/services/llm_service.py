@@ -248,9 +248,10 @@ and cinematic. Avoid jerky, hyperactive, or seizure-inducing visuals.
   (scale 0.1-0.3)
 - u_treble → fine detail: shimmer, crystalline edges, sparkle effects \
   (scale 0.05-0.15)
-- u_beat → SUBTLE impact: gentle bloom, slight color shift, small scale \
-  pop. Use `smoothstep(0.0, 1.0, u_beat) * 0.15` — NOT full-screen flash. \
-  NEVER flash to white or black. NEVER zoom the camera on beats.
+- u_beat → VERY SUBTLE impact: gentle glow only. Maximum additive: \
+  `col += vec3(0.08) * smoothstep(0.0, 1.0, u_beat)`. NEVER go above 0.1. \
+  NEVER flash to white or black. NEVER zoom the camera on beats. \
+  NEVER multiply color by u_beat — only ADD a tiny amount.
 - u_energy → overall intensity: slight brightness boost, glow radius \
   (scale 0.1-0.3, added to a base of 0.7-0.8)
 - u_spectralCentroid → tonal quality: warm/cool color temperature blend \
@@ -265,12 +266,18 @@ These rules prevent ugly, unwatchable output. Follow them strictly:
    The viewer should feel like they're drifting, not spinning.
 2. NO CAMERA SHAKE: NEVER add random noise to camera position. Keep camera \
    movement on smooth curves (sin/cos with slow time).
-3. NO EXCESSIVE ZOOM: Set a comfortable field of view (FOV ~1.5-2.0 in the \
-   ray direction normalize). NEVER let audio uniforms multiply the FOV or \
-   camera distance — the scene should stay at a stable viewing distance.
-4. NO FULL-SCREEN FLASH: Beat impacts should add a SUBTLE glow (0.05-0.15), \
-   not a blinding white flash. `col += vec3(0.1) * smoothstep(...)` is fine; \
-   `col += vec3(1.0) * u_beat` is NOT.
+3. NO EXCESSIVE ZOOM: Set a WIDE field of view. For simple cameras use \
+   `normalize(vec3(uv, 2.0))` or wider. For lookat cameras use \
+   `normalize(fwd * 2.0 + right * uv.x + up * uv.y)`. NEVER use focal \
+   length below 1.8 — values like 0.5, 1.0, or 1.5 are TOO ZOOMED IN. \
+   NEVER let audio uniforms multiply the FOV or camera distance — the \
+   scene must stay at a stable, comfortable viewing distance. Camera \
+   orbit radius should be 3.0-6.0 (not 1.0-2.0).
+4. NO FULL-SCREEN FLASH: Beat impacts should add a TINY glow (0.05-0.08 max), \
+   not a blinding white flash. `col += vec3(0.08) * smoothstep(...)` is the \
+   MAXIMUM. `col += vec3(0.1) * u_beat` is already TOO BRIGHT. \
+   `col += vec3(1.0) * u_beat` is absolutely FORBIDDEN. NEVER multiply the \
+   entire color by u_beat — only ADD a small constant.
 5. SMOOTH MOTION: All motion driven by audio should be smooth. Use \
    `mix()` or `smoothstep()` to interpolate, never raw uniform multiplication \
    that creates jitter.
@@ -319,7 +326,7 @@ vec3 getNormal(vec3 p) {
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
     vec3 ro = vec3(0.0, 0.0, -3.0);
-    vec3 rd = normalize(vec3(uv, 1.5));
+    vec3 rd = normalize(vec3(uv, 2.0));
     float t = 0.0;
     for (int i = 0; i < 64; i++) {
         float d = scene(ro + rd * t);
@@ -335,7 +342,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         col = palette(t * 0.1 + iTime * 0.1 + u_spectralCentroid,
             vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4),
             vec3(0.0, 0.15, 0.2)) * diff;
-        col += vec3(0.15) * smoothstep(0.0, 1.0, u_beat);
+        col += vec3(0.08) * smoothstep(0.0, 1.0, u_beat);
     }
     col *= 1.0 - 0.4 * length(uv);
     fragColor = vec4(col, 1.0);
@@ -492,12 +499,12 @@ vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
     float angle = iTime * 0.08 + u_mid * 0.1;
-    vec3 ro = vec3(2.5 * sin(angle), 1.5 + u_bass * 0.15, 2.5 * cos(angle));
+    vec3 ro = vec3(4.0 * sin(angle), 1.5 + u_bass * 0.15, 4.0 * cos(angle));
     vec3 ta = vec3(0.0);
     vec3 fwd = normalize(ta - ro);
     vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
     vec3 up = cross(right, fwd);
-    vec3 rd = normalize(fwd * 1.8 + right * uv.x + up * uv.y);
+    vec3 rd = normalize(fwd * 2.0 + right * uv.x + up * uv.y);
     float t = 0.0;
     float ao = 0.0;
     vec3 col = vec3(0.02, 0.01, 0.04);
@@ -852,6 +859,67 @@ def _strip_texture_sampler_calls(code: str) -> str:
     return code
 
 
+def _fix_narrow_fov(code: str) -> str:
+    """Widen narrow field-of-view values in raymarching cameras.
+
+    LLM-generated shaders often use tight FOV (small focal length)
+    which makes scenes look extremely zoomed in.  We detect the two
+    common raymarching camera patterns and enforce a minimum FOV:
+
+    Pattern A (simple):  ``normalize(vec3(uv, X))``
+    Pattern B (lookat):  ``normalize(fwd * X + right * uv.x + up * uv.y)``
+
+    Minimum focal length is 1.8 (comfortable wide-angle).
+    """
+    min_fov = 1.8
+
+    # Pattern A: normalize(vec3(uv, FLOAT))
+    def _fix_simple_fov(m: _re.Match) -> str:
+        prefix = m.group(1)  # "normalize(vec3(uv, "  or similar
+        val_str = m.group(2)
+        suffix = m.group(3)
+        try:
+            val = float(val_str)
+            if val < min_fov:
+                _logger.debug("Widening simple FOV from %s to %s", val_str, min_fov)
+                return f"{prefix}{min_fov}{suffix}"
+        except ValueError:
+            pass
+        return m.group(0)
+
+    code = _re.sub(
+        r"(normalize\s*\(\s*vec3\s*\(\s*uv\s*,\s*)"
+        r"(\d+\.?\d*)"
+        r"(\s*\))",
+        _fix_simple_fov,
+        code,
+    )
+
+    # Pattern B: normalize(fwd * FLOAT + right * uv.x + up * uv.y)
+    def _fix_lookat_fov(m: _re.Match) -> str:
+        prefix = m.group(1)
+        val_str = m.group(2)
+        suffix = m.group(3)
+        try:
+            val = float(val_str)
+            if val < min_fov:
+                _logger.debug("Widening lookat FOV from %s to %s", val_str, min_fov)
+                return f"{prefix}{min_fov}{suffix}"
+        except ValueError:
+            pass
+        return m.group(0)
+
+    code = _re.sub(
+        r"(normalize\s*\(\s*fwd\s*\*\s*)"
+        r"(\d+\.?\d*)"
+        r"(\s*\+\s*right\s*\*)",
+        _fix_lookat_fov,
+        code,
+    )
+
+    return code
+
+
 def _fix_missing_semicolons(code: str) -> str:
     """Insert missing semicolons before function declarations.
 
@@ -929,17 +997,110 @@ def sanitize_shader_code(raw: str) -> str:
     # Rename main() to mainImage(out vec4 fragColor, in vec2 fragCoord)
     # so the host wrapper can call it.
     if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        # Handle both void main() and void main(void)
         code = _re.sub(
-            r"\bvoid\s+main\s*\(\s*\)",
+            r"\bvoid\s+main\s*\(\s*(?:void\s*)?\)",
             "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
             code,
             count=1,
         )
         # Replace any gl_FragColor writes with fragColor (the out param)
         code = _re.sub(r"\bgl_FragColor\b", "fragColor", code)
-        # Replace any gl_FragCoord with fragCoord where used as the
-        # input coordinate (but keep gl_FragCoord.xy usage as-is since
-        # the wrapper still exposes it).
+
+    # ── Rename near-miss mainImage signatures ────────────────
+    # LLM sometimes writes mainImage with wrong params, e.g.
+    # void mainImage(vec4 fragColor, vec2 fragCoord) (missing out/in)
+    # or void mainImage(out vec4 color, in vec2 coord) (wrong names)
+    if not _re.search(r"\bvoid\s+mainImage\s*\(\s*out\s+vec4\s+fragColor\s*,\s*in\s+vec2\s+fragCoord\s*\)", code):
+        # Fix signatures that have mainImage but wrong parameter qualifiers/names
+        code = _re.sub(
+            r"\bvoid\s+mainImage\s*\([^)]*vec4[^)]*vec2[^)]*\)",
+            "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
+            code,
+            count=1,
+        )
+
+    # ── Last resort: synthesize mainImage if completely missing ──
+    # When the LLM outputs code with no entry point at all, look
+    # for patterns that indicate rendering code (fragColor assignment,
+    # gl_FragColor, etc.) and wrap appropriately.
+    if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        # Check if there's a function that writes fragColor or gl_FragColor
+        # (a rendering function with the wrong name)
+        m_render_fn = _re.search(
+            r"\bvoid\s+(\w+)\s*\(\s*(?:out\s+)?vec4\s+\w+\s*,"
+            r"\s*(?:in\s+)?vec2\s+\w+\s*\)",
+            code,
+        )
+        if m_render_fn:
+            # Rename this function to mainImage with correct signature
+            old_name = m_render_fn.group(1)
+            _logger.debug(
+                "Renaming '%s' to mainImage as entry point", old_name,
+            )
+            code = _re.sub(
+                r"\bvoid\s+" + _re.escape(old_name) + r"\s*\([^)]*\)",
+                "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
+                code,
+                count=1,
+            )
+            # Also rename all calls to this function
+            code = _re.sub(
+                r"\b" + _re.escape(old_name) + r"\s*\(",
+                "mainImage(",
+                code,
+            )
+        elif _re.search(r"\bfragColor\b|\bgl_FragColor\b", code):
+            # Code has fragColor writes but no function wrapping them.
+            # Find the split point: keep top-level functions above,
+            # wrap remaining statements in mainImage.
+            _logger.debug(
+                "No entry point found but fragColor writes detected "
+                "— synthesizing mainImage wrapper",
+            )
+            # Simple heuristic: find the last closing brace of a
+            # function definition, everything after it is "main" code
+            lines = code.split("\n")
+            last_func_end = -1
+            brace_depth = 0
+            in_func = False
+            for i, line in enumerate(lines):
+                stripped = line.strip()
+                # Detect function definition start
+                if _re.match(
+                    r"^(?:float|vec[234]|mat[234]|int|void|bool)"
+                    r"\s+\w+\s*\(",
+                    stripped,
+                ) and not stripped.startswith("void mainImage"):
+                    in_func = True
+                if in_func:
+                    brace_depth += stripped.count("{") - stripped.count("}")
+                    if brace_depth <= 0 and in_func and "{" in code[:sum(len(l)+1 for l in lines[:i+1])]:
+                        last_func_end = i
+                        in_func = False
+                        brace_depth = 0
+
+            if last_func_end >= 0:
+                # Split: functions stay above, remaining code goes into mainImage
+                pre = "\n".join(lines[:last_func_end + 1])
+                post = "\n".join(lines[last_func_end + 1:])
+                if post.strip():
+                    code = (
+                        pre + "\n\n"
+                        "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n"
+                        "    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);\n"
+                        + post + "\n"
+                        "}\n"
+                    )
+            else:
+                # No function definitions at all — wrap everything
+                code = (
+                    "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n"
+                    "    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);\n"
+                    + code + "\n"
+                    "}\n"
+                )
+            code = _re.sub(r"\bgl_FragColor\b", "fragColor", code)
 
     # ── Fix ALL void-as-expression patterns ──────────────────
     # This is the big one: NVIDIA rejects void(expr), void(),
@@ -971,6 +1132,10 @@ def sanitize_shader_code(raw: str) -> str:
 
     # ── Fix missing semicolons before function declarations ──
     code = _fix_missing_semicolons(code)
+
+    # ── Widen narrow FOV values ─────────────────────────────
+    # Prevents "too zoomed in" output by enforcing minimum focal length
+    code = _fix_narrow_fov(code)
 
     # ── Collapse excessive blank lines ───────────────────────
     code = _re.sub(r"\n{3,}", "\n\n", code)
@@ -1346,7 +1511,7 @@ End with 1-2 follow-up questions to refine the concept."""
             "u_bass → gentle macro deformation (scale 0.1-0.2), "
             "u_mid → color/pattern (scale 0.1-0.2), "
             "u_treble → fine detail (scale 0.05-0.15), "
-            "u_beat → subtle glow (scale 0.1-0.15, NOT flash), "
+            "u_beat → very subtle glow ONLY (scale 0.05-0.08, NEVER above 0.1), "
             "u_energy → brightness (scale 0.1-0.3), "
             "u_spectralCentroid → warm/cool color temp.\n\n"
             "NVIDIA RULES (CRITICAL):\n"
