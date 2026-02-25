@@ -71,16 +71,16 @@ vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
-    float t = iTime * 0.3;
+    float t = iTime * 0.1;
     float d = length(uv);
-    uv += sin(uv.yx * 3.0 + t + u_bass * 2.0) * (0.3 + u_energy * 0.5);
+    uv += sin(uv.yx * 3.0 + t + u_bass * 0.3) * (0.2 + u_energy * 0.15);
     d = length(uv);
-    float rings = sin(d * 8.0 - t * 2.0 + u_bass * 6.0) * 0.5 + 0.5;
-    vec3 col = palette(d + t * 0.2 + u_spectralCentroid,
+    float rings = sin(d * 8.0 - t * 2.0 + u_bass * 0.8) * 0.5 + 0.5;
+    vec3 col = palette(d + t * 0.2 + u_spectralCentroid * 0.2,
         vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4), vec3(0.0, 0.15, 0.2));
     col *= rings;
-    col += vec3(0.1, 0.05, 0.15) * u_treble * 3.0;
-    col += vec3(0.3) * smoothstep(0.0, 1.0, u_beat);
+    col += vec3(0.1, 0.05, 0.15) * u_treble * 0.5;
+    col += vec3(0.1) * smoothstep(0.0, 1.0, u_beat);
     col *= 1.0 - smoothstep(0.5, 1.5, length(uv));
     fragColor = vec4(col, 1.0);
 }
@@ -100,14 +100,14 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     a = mod(a, 6.28318 / segments);
     a = abs(a - 3.14159 / segments);
     uv = vec2(cos(a), sin(a)) * r;
-    uv += sin(uv * 4.0 + t + u_mid * 3.0) * (0.15 + u_bass * 0.2);
+    uv += sin(uv * 4.0 + t + u_mid * 0.3) * (0.1 + u_bass * 0.1);
     float d = length(uv);
-    float pattern = sin(d * 12.0 - t * 3.0 + u_bass * 5.0) * 0.5 + 0.5;
-    pattern *= sin(a * segments * 2.0 + t + u_treble * 4.0) * 0.5 + 0.5;
-    vec3 col = palette(d * 0.5 + t * 0.3 + u_spectralCentroid * 0.5,
+    float pattern = sin(d * 12.0 - t * 1.5 + u_bass * 0.8) * 0.5 + 0.5;
+    pattern *= sin(a * segments * 2.0 + t + u_treble * 0.5) * 0.5 + 0.5;
+    vec3 col = palette(d * 0.5 + t * 0.15 + u_spectralCentroid * 0.2,
         vec3(0.5), vec3(0.5), vec3(1.0, 0.8, 0.6), vec3(0.2, 0.1, 0.0));
-    col *= pattern * 1.5;
-    col += vec3(0.2, 0.1, 0.3) * smoothstep(0.0, 1.0, u_beat);
+    col *= pattern * 1.2;
+    col += vec3(0.08, 0.04, 0.1) * smoothstep(0.0, 1.0, u_beat);
     col += vec3(0.05) * u_treble;
     col *= 1.0 - smoothstep(0.6, 1.6, r);
     fragColor = vec4(col, 1.0);
@@ -124,13 +124,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     float a = atan(uv.y, uv.x) / 6.28318;
     float r = length(uv);
     float tunnel = 0.5 / (r + 0.001);
-    float speed = iTime * 0.5 + u_energy * 0.3;
+    float speed = iTime * 0.15 + u_energy * 0.1;
     vec2 st = vec2(a + speed * 0.1, tunnel - speed);
-    st += sin(st.yx * 3.0) * (0.1 + u_bass * 0.15);
+    st += sin(st.yx * 3.0) * (0.08 + u_bass * 0.1);
     float p1 = sin(st.x * 12.0 + st.y * 6.0) * 0.5 + 0.5;
-    float p2 = sin(st.x * 8.0 - st.y * 4.0 + u_mid * 4.0) * 0.5 + 0.5;
+    float p2 = sin(st.x * 8.0 - st.y * 4.0 + u_mid * 0.5) * 0.5 + 0.5;
     float pattern = p1 * p2;
-    vec3 col = palette(tunnel * 0.1 + iTime * 0.05 + u_spectralCentroid,
+    vec3 col = palette(tunnel * 0.1 + iTime * 0.03 + u_spectralCentroid * 0.2,
         vec3(0.5), vec3(0.5), vec3(0.8, 0.5, 1.0), vec3(0.1, 0.2, 0.3));
     col *= pattern;
     col *= tunnel * 0.4;
@@ -170,19 +170,19 @@ float fbm(vec2 p) {
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
     vec2 p = uv * 4.0;
-    float t = iTime * 0.3;
+    float t = iTime * 0.1;
     p.x += t;
-    p += fbm(p + t * 0.2) * (0.5 + u_bass * 0.5);
+    p += fbm(p + t * 0.15) * (0.3 + u_bass * 0.15);
     float n = fbm(p);
-    float wave = sin(uv.y * 10.0 + n * 6.0 + t * 2.0 + u_mid * 3.0);
+    float wave = sin(uv.y * 10.0 + n * 6.0 + t * 1.0 + u_mid * 0.5);
     wave = smoothstep(0.0, 0.15, abs(wave - 0.3));
     float warm = 1.0 - u_spectralCentroid;
     vec3 c1 = vec3(0.1, 0.3, 0.6) * warm + vec3(0.5, 0.2, 0.7) * (1.0 - warm);
     vec3 c2 = vec3(0.8, 0.4, 0.2) * warm + vec3(0.2, 0.6, 0.9) * (1.0 - warm);
     vec3 col = mix(c1, c2, n);
     col *= wave;
-    col += vec3(0.05, 0.02, 0.08) * u_energy * 2.0;
-    col += vec3(0.2) * smoothstep(0.0, 1.0, u_beat);
+    col += vec3(0.05, 0.02, 0.08) * (0.5 + u_energy * 0.3);
+    col += vec3(0.1) * smoothstep(0.0, 1.0, u_beat);
     col += vec3(0.03) * u_treble;
     fragColor = vec4(col, 1.0);
 }
@@ -213,7 +213,7 @@ vec3 getNormal(vec3 p) {
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
-    float angle = iTime * 0.2;
+    float angle = iTime * 0.1;
     vec3 ro = vec3(sin(angle) * 3.5, 1.0, cos(angle) * 3.5);
     vec3 ta = vec3(0.0, 0.0, 0.0);
     vec3 fwd = normalize(ta - ro);
@@ -234,11 +234,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         vec3 light = normalize(vec3(1.0, 2.0, -1.0));
         float diff = max(dot(n, light), 0.0);
         float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 32.0);
-        col = palette(p.y * 0.3 + iTime * 0.1 + u_spectralCentroid,
+        col = palette(p.y * 0.3 + iTime * 0.05 + u_spectralCentroid * 0.2,
             vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4), vec3(0.0, 0.15, 0.2));
         col *= diff * 0.8 + 0.2;
-        col += vec3(0.8) * spec * u_treble;
-        col += vec3(0.15) * smoothstep(0.0, 1.0, u_beat);
+        col += vec3(0.4) * spec * u_treble * 0.3;
+        col += vec3(0.1) * smoothstep(0.0, 1.0, u_beat);
     }
     col += vec3(0.01) * u_energy;
     col *= 1.0 - 0.4 * length(uv);
@@ -282,8 +282,8 @@ vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
-    float angle = iTime * 0.15 + u_mid * 0.5;
-    vec3 ro = vec3(2.5 * sin(angle), 1.5 + u_bass * 0.4, 2.5 * cos(angle));
+    float angle = iTime * 0.08 + u_mid * 0.1;
+    vec3 ro = vec3(2.5 * sin(angle), 1.5 + u_bass * 0.15, 2.5 * cos(angle));
     vec3 ta = vec3(0.0);
     vec3 fwd = normalize(ta - ro);
     vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
@@ -299,16 +299,16 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             vec3 light = normalize(vec3(0.8, 1.5, -0.6));
             float diff = max(dot(n, light), 0.0);
             float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 48.0);
-            col = palette(length(p) * 0.2 + iTime * 0.05 + u_spectralCentroid,
+            col = palette(length(p) * 0.2 + iTime * 0.03 + u_spectralCentroid * 0.2,
                 vec3(0.5), vec3(0.5), vec3(0.9, 0.6, 1.0), vec3(0.1, 0.2, 0.3));
             col *= diff * 0.6 + 0.4;
-            col += spec * vec3(0.8, 0.7, 1.0) * u_treble;
+            col += spec * vec3(0.8, 0.7, 1.0) * u_treble * 0.3;
             break;
         }
         t += d;
         if (t > 25.0) break;
     }
-    col += vec3(0.2, 0.1, 0.3) * smoothstep(0.0, 1.0, u_beat) * 0.6;
+    col += vec3(0.08, 0.04, 0.1) * smoothstep(0.0, 1.0, u_beat);
     col *= 1.0 - 0.3 * length(uv);
     fragColor = vec4(col, 1.0);
 }
@@ -345,8 +345,8 @@ vec3 getGridNormal(vec3 p) {
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
-    float camT = iTime * 0.3;
-    vec3 ro = vec3(sin(camT) * 5.0, 2.0, cos(camT) * 5.0);
+    float camT = iTime * 0.1;
+    vec3 ro = vec3(sin(camT) * 5.0, 2.0 + sin(camT * 0.3) * 0.5, cos(camT) * 5.0);
     vec3 ta = vec3(0.0);
     vec3 fwd = normalize(ta - ro);
     vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
@@ -363,18 +363,18 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             float diff = max(dot(n, light), 0.0);
             float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 64.0);
             float idVal = hashFn(dot(floor((p + 1.5) / 3.0), vec3(1.0, 57.0, 113.0)));
-            col = palette(idVal + iTime * 0.1 + u_spectralCentroid,
+            col = palette(idVal + iTime * 0.05 + u_spectralCentroid * 0.2,
                 vec3(0.5), vec3(0.5), vec3(1.0, 0.8, 0.5), vec3(0.0, 0.1, 0.2));
             col *= diff * 0.7 + 0.3;
-            col += spec * u_treble * 1.5;
+            col += spec * u_treble * 0.4;
             break;
         }
-        float glow = 0.004 / (abs(d) + 0.05) * u_energy;
+        float glow = 0.004 / (abs(d) + 0.05) * (0.5 + u_energy * 0.3);
         col += vec3(glow * 0.2, glow * 0.05, glow * 0.3) * 0.3;
         t += d;
         if (t > 35.0) break;
     }
-    col += vec3(0.25, 0.15, 0.35) * smoothstep(0.0, 1.0, u_beat) * 0.5;
+    col += vec3(0.1, 0.06, 0.12) * smoothstep(0.0, 1.0, u_beat);
     col *= 1.0 - 0.3 * length(uv);
     fragColor = vec4(col, 1.0);
 }

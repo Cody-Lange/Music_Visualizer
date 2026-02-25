@@ -232,25 +232,53 @@ there are NO texture inputs. Generate all visuals procedurally.
 You MUST define `void mainImage(out vec4 fragColor, in vec2 fragCoord)` \
 — this is the REQUIRED entry point. The wrapper calls it from main().
 
-## AUDIO MAPPING — BE CREATIVE AND THOROUGH
+## AUDIO MAPPING — SMOOTH AND MUSICAL
 
-Map EVERY audio uniform to something visible. Be aggressive with reactivity:
+Map EVERY audio uniform to something visible, but keep motion SMOOTH \
+and cinematic. Avoid jerky, hyperactive, or seizure-inducing visuals.
 
-- u_bass → macro motion: radius pulsing, domain warping amplitude, camera shake, \
-  large-scale deformation (scale 0.2-0.5)
-- u_lowMid → medium-scale features: secondary oscillations, fog density, \
-  wave amplitude modulation
-- u_mid → color cycling, pattern frequency modulation, rotation speed, \
-  material properties
-- u_highMid → detail variation: noise octave weighting, surface roughness, \
-  particle density
-- u_treble → fine detail: shimmer, crystalline edges, high-freq noise, \
-  sparkle effects (scale 0.1-0.3)
-- u_beat → IMPACT events: bloom flash, sudden camera zoom, color palette \
-  shift, scale pop, ring burst via smoothstep(0.0, 1.0, u_beat)
-- u_energy → overall intensity: brightness, glow radius, effect amplitude
+- u_bass → gentle macro motion: radius pulsing, domain warping amplitude, \
+  large-scale deformation. Keep scale SMALL: multiply by 0.1-0.3 max. \
+  Example: `1.0 + u_bass * 0.2` NOT `1.0 + u_bass * 2.0`
+- u_lowMid → medium-scale features: fog density, wave amplitude modulation \
+  (scale 0.1-0.3)
+- u_mid → color cycling, pattern frequency modulation, rotation speed \
+  (scale 0.05-0.2)
+- u_highMid → detail variation: noise octave weighting, surface roughness \
+  (scale 0.1-0.3)
+- u_treble → fine detail: shimmer, crystalline edges, sparkle effects \
+  (scale 0.05-0.15)
+- u_beat → SUBTLE impact: gentle bloom, slight color shift, small scale \
+  pop. Use `smoothstep(0.0, 1.0, u_beat) * 0.15` — NOT full-screen flash. \
+  NEVER flash to white or black. NEVER zoom the camera on beats.
+- u_energy → overall intensity: slight brightness boost, glow radius \
+  (scale 0.1-0.3, added to a base of 0.7-0.8)
 - u_spectralCentroid → tonal quality: warm/cool color temperature blend \
-  (low=warm ambers, high=cool blues)
+  (low=warm ambers, high=cool blues, scale 0.1-0.3)
+
+## VISUAL QUALITY RULES — CRITICAL
+
+These rules prevent ugly, unwatchable output. Follow them strictly:
+
+1. CAMERA SPEED: Camera orbit/movement must be SLOW. Use `iTime * 0.05` \
+   to `iTime * 0.15` for camera angles. NEVER use `iTime * 0.4` or higher. \
+   The viewer should feel like they're drifting, not spinning.
+2. NO CAMERA SHAKE: NEVER add random noise to camera position. Keep camera \
+   movement on smooth curves (sin/cos with slow time).
+3. NO EXCESSIVE ZOOM: Set a comfortable field of view (FOV ~1.5-2.0 in the \
+   ray direction normalize). NEVER let audio uniforms multiply the FOV or \
+   camera distance — the scene should stay at a stable viewing distance.
+4. NO FULL-SCREEN FLASH: Beat impacts should add a SUBTLE glow (0.05-0.15), \
+   not a blinding white flash. `col += vec3(0.1) * smoothstep(...)` is fine; \
+   `col += vec3(1.0) * u_beat` is NOT.
+5. SMOOTH MOTION: All motion driven by audio should be smooth. Use \
+   `mix()` or `smoothstep()` to interpolate, never raw uniform multiplication \
+   that creates jitter.
+6. STABLE COMPOSITION: The main subject should stay roughly centered and \
+   at a consistent scale. Avoid audio-driven scaling that makes objects \
+   balloon or shrink dramatically.
+7. GENTLE COLOR TRANSITIONS: Color palette changes from audio should be \
+   gradual (scale 0.1-0.3). Avoid abrupt color pops.
 
 ## TECHNIQUES — USE THESE FREELY, COMBINE THEM
 
@@ -343,17 +371,17 @@ float fbm(vec2 p) {
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = fragCoord / iResolution.xy;
     vec2 p = uv * 6.0;
-    p.x += iTime * 0.2;
-    p += fbm(p * 0.8 + iTime * 0.1) * (0.5 + u_bass * 0.8);
-    float n = fbm(p + u_mid * 2.0);
-    float n2 = fbm(p * 2.0 - iTime * 0.3);
+    p.x += iTime * 0.08;
+    p += fbm(p * 0.8 + iTime * 0.05) * (0.3 + u_bass * 0.2);
+    float n = fbm(p + u_mid * 0.3);
+    float n2 = fbm(p * 2.0 - iTime * 0.1);
     vec3 col = mix(
         vec3(0.1, 0.2, 0.5),
         vec3(0.9, 0.4, 0.1),
-        n + u_spectralCentroid * 0.3);
-    col += vec3(0.6, 0.3, 0.8) * n2 * u_treble * 2.0;
-    col += vec3(0.2) * smoothstep(0.0, 1.0, u_beat);
-    col *= 0.8 + 0.4 * u_energy;
+        n + u_spectralCentroid * 0.2);
+    col += vec3(0.6, 0.3, 0.8) * n2 * u_treble * 0.5;
+    col += vec3(0.1) * smoothstep(0.0, 1.0, u_beat);
+    col *= 0.8 + 0.2 * u_energy;
     fragColor = vec4(col, 1.0);
 }
 
@@ -390,8 +418,8 @@ vec3 getNormal(vec3 p) {
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
-    float camT = iTime * 0.4;
-    vec3 ro = vec3(sin(camT) * 6.0, 2.0 + sin(camT * 0.7), cos(camT) * 6.0);
+    float camT = iTime * 0.1;
+    vec3 ro = vec3(sin(camT) * 6.0, 2.0 + sin(camT * 0.3) * 0.5, cos(camT) * 6.0);
     vec3 ta = vec3(0.0, 0.0, 0.0);
     vec3 fwd = normalize(ta - ro);
     vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
@@ -408,20 +436,20 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             float diff = max(dot(n, light), 0.0);
             float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 64.0);
             float idVal = hashFn(dot(floor((p + 1.5) / 3.0), vec3(1.0, 57.0, 113.0)));
-            col = palette(idVal + iTime * 0.1 + u_spectralCentroid,
+            col = palette(idVal + iTime * 0.05 + u_spectralCentroid * 0.2,
                 vec3(0.5), vec3(0.5), vec3(1.0, 0.8, 0.5), vec3(0.0, 0.1, 0.2));
             col *= diff * 0.7 + 0.3;
-            col += spec * u_treble * 2.0;
-            float glow = 0.03 / (d + 0.01) * u_energy;
+            col += spec * u_treble * 0.5;
+            float glow = 0.03 / (d + 0.01) * (0.5 + u_energy * 0.3);
             col += vec3(glow * 0.3, glow * 0.1, glow * 0.4);
             break;
         }
-        float glow = 0.005 / (abs(d) + 0.05) * u_energy;
+        float glow = 0.005 / (abs(d) + 0.05) * (0.5 + u_energy * 0.3);
         col += vec3(glow * 0.2, glow * 0.05, glow * 0.3) * 0.3;
         t += d;
         if (t > 40.0) break;
     }
-    col += vec3(0.3, 0.2, 0.4) * smoothstep(0.0, 1.0, u_beat) * 0.5;
+    col += vec3(0.1, 0.07, 0.12) * smoothstep(0.0, 1.0, u_beat);
     col *= 1.0 - 0.35 * length(uv);
     fragColor = vec4(col, 1.0);
 }
@@ -463,8 +491,8 @@ vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
-    float angle = iTime * 0.15 + u_mid * 0.5;
-    vec3 ro = vec3(2.5 * sin(angle), 1.5 + u_bass * 0.5, 2.5 * cos(angle));
+    float angle = iTime * 0.08 + u_mid * 0.1;
+    vec3 ro = vec3(2.5 * sin(angle), 1.5 + u_bass * 0.15, 2.5 * cos(angle));
     vec3 ta = vec3(0.0);
     vec3 fwd = normalize(ta - ro);
     vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
@@ -482,11 +510,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             float diff = max(dot(n, light), 0.0);
             float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 48.0);
             float fresnel = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
-            col = palette(length(p) * 0.2 + iTime * 0.05 + u_spectralCentroid,
+            col = palette(length(p) * 0.2 + iTime * 0.03 + u_spectralCentroid * 0.2,
                 vec3(0.5), vec3(0.5), vec3(0.9, 0.6, 1.0), vec3(0.1, 0.2, 0.3));
             col *= diff * 0.6 + 0.4;
-            col += spec * vec3(0.8, 0.7, 1.0) * u_treble;
-            col += fresnel * vec3(0.2, 0.1, 0.4) * u_highMid;
+            col += spec * vec3(0.8, 0.7, 1.0) * u_treble * 0.3;
+            col += fresnel * vec3(0.2, 0.1, 0.4) * u_highMid * 0.3;
             col *= 1.0 - ao * 0.4;
             break;
         }
@@ -494,7 +522,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         t += d;
         if (t > 30.0) break;
     }
-    col += vec3(0.25, 0.15, 0.35) * smoothstep(0.0, 1.0, u_beat) * 0.6;
+    col += vec3(0.08, 0.05, 0.1) * smoothstep(0.0, 1.0, u_beat);
     col *= 1.0 - 0.35 * length(uv);
     col = pow(col, vec3(0.9));
     fragColor = vec4(col, 1.0);
@@ -895,6 +923,24 @@ def sanitize_shader_code(raw: str) -> str:
     # ── Strip void main() wrapper ────────────────────────────
     code = _RE_VOID_MAIN.sub("", code)
 
+    # ── Convert void main() → void mainImage() if needed ──
+    # When the LLM puts all code inside void main() without a
+    # separate mainImage, the wrapper regex above doesn't match.
+    # Rename main() to mainImage(out vec4 fragColor, in vec2 fragCoord)
+    # so the host wrapper can call it.
+    if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        code = _re.sub(
+            r"\bvoid\s+main\s*\(\s*\)",
+            "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
+            code,
+            count=1,
+        )
+        # Replace any gl_FragColor writes with fragColor (the out param)
+        code = _re.sub(r"\bgl_FragColor\b", "fragColor", code)
+        # Replace any gl_FragCoord with fragCoord where used as the
+        # input coordinate (but keep gl_FragCoord.xy usage as-is since
+        # the wrapper still exposes it).
+
     # ── Fix ALL void-as-expression patterns ──────────────────
     # This is the big one: NVIDIA rejects void(expr), void(),
     # return void;, func(void) — even though Mesa accepts them.
@@ -1211,7 +1257,17 @@ End with 1-2 follow-up questions to refine the concept."""
                     contents=user_prompt,
                     config=config,
                 )
-                raw = response.text.strip()
+                raw = (response.text or "").strip()
+                if not raw:
+                    logger.warning(
+                        "Gemini returned empty response for shader gen "
+                        "(attempt %d/%d)",
+                        attempt + 1, max_retries + 1,
+                    )
+                    if attempt < max_retries:
+                        await asyncio.sleep(2.0)
+                        continue
+                    return None
                 sanitized = sanitize_shader_code(raw)
                 # Log first 40 lines at INFO so compilation failures
                 # can be diagnosed from server output.
@@ -1283,11 +1339,16 @@ End with 1-2 follow-up questions to refine the concept."""
             "- Cinematic camera orbits with smooth noise\n"
             "- Volumetric glow and fog for depth atmosphere\n"
             "Combine multiple techniques. Use 80-200 lines.\n\n"
-            "EVERY audio uniform must drive a visible parameter. "
-            "u_bass → macro deformation, u_mid → pattern/color, "
-            "u_treble → fine detail, u_beat → flash/impact, "
-            "u_energy → brightness, u_spectralCentroid → warm/cool.\n"
-            "Make the audio reactivity AGGRESSIVE and obvious.\n\n"
+            "EVERY audio uniform must drive a visible parameter, but keep "
+            "motion SMOOTH and cinematic — no jerky camera, no excessive "
+            "zoom, no blinding flashes. Use small multipliers (0.1-0.3) "
+            "on audio uniforms. Camera speed: iTime * 0.05 to 0.15.\n"
+            "u_bass → gentle macro deformation (scale 0.1-0.2), "
+            "u_mid → color/pattern (scale 0.1-0.2), "
+            "u_treble → fine detail (scale 0.05-0.15), "
+            "u_beat → subtle glow (scale 0.1-0.15, NOT flash), "
+            "u_energy → brightness (scale 0.1-0.3), "
+            "u_spectralCentroid → warm/cool color temp.\n\n"
             "NVIDIA RULES (CRITICAL):\n"
             "- Use float literals: 1.0 not 1 in vec/mat constructors\n"
             "- Name hash functions 'hashFn', noise functions 'noiseFn'\n"
@@ -1479,8 +1540,10 @@ End with 1-2 follow-up questions to refine the concept."""
             "- Domain repetition for infinite geometry grids\n"
             "- Voronoi + kaleidoscope combinations\n"
             "- Tunnel effects with complex texturing\n\n"
-            "EVERY audio uniform must visibly affect the output. "
-            "Make the audio reactivity dramatic.\n\n"
+            "EVERY audio uniform must visibly affect the output, but keep "
+            "motion SMOOTH and cinematic. Use small multipliers (0.1-0.3) "
+            "on audio uniforms. Camera: iTime * 0.05 to 0.15. "
+            "No camera shake, no excessive zoom, no blinding beat flashes.\n\n"
             "NVIDIA COMPATIBILITY IS MANDATORY:\n"
             "- ALL float literals must have decimals: 1.0 not 1\n"
             "- Name hash functions 'hashFn', noise functions 'noiseFn'\n"
