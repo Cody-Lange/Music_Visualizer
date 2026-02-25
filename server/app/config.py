@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     # App settings
     cors_origins: str = "http://localhost:5173"
     max_upload_size_mb: int = 50
+    gemini_model: str = "gemini-2.5-flash"
 
     @property
     def cors_origin_list(self) -> list[str]:

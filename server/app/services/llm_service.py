@@ -222,7 +222,7 @@ class LLMService:
 
         try:
             chat = client.aio.chats.create(
-                model="gemini-2.0-flash",
+                model=settings.gemini_model,
                 history=history if history else None,
                 config=config,
             )
@@ -311,7 +311,7 @@ End with 1-2 follow-up questions to refine the concept."""
 
         try:
             chat = client.aio.chats.create(
-                model="gemini-2.0-flash",
+                model=settings.gemini_model,
                 history=history if history else None,
                 config=config,
             )

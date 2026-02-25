@@ -86,24 +86,12 @@ export function ChatPanel() {
     }
   }, [messages]);
 
-  // When analysis completes and we're connected, auto-send the initial analysis request
+  // When analysis completes and we're connected, silently trigger the LLM
+  // to produce its opening analysis — no fake user bubble
   useEffect(() => {
     if (analysis && isConnected && !initialAnalysisSent.current) {
       initialAnalysisSent.current = true;
-
-      const existingUserMsg = messages.find((m) => m.role === "user");
-      if (existingUserMsg) {
-        sendMessage(existingUserMsg.content);
-      } else {
-        const defaultPrompt = "Analyze this track and suggest a visualization concept.";
-        addMessage({
-          id: createMessageId(),
-          role: "user",
-          content: defaultPrompt,
-          timestamp: Date.now(),
-        });
-        sendMessage(defaultPrompt);
-      }
+      sendMessage("Analyze this track and present your initial creative vision.");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis, isConnected]);
@@ -142,13 +130,20 @@ export function ChatPanel() {
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border bg-bg-secondary px-4 py-3">
+      <div className="flex items-center justify-between border-b border-border bg-bg-secondary px-6 py-3">
         <h2 className="text-sm font-semibold text-text-primary">Creative Director</h2>
         {analysis && <PhaseIndicator phase={phase} />}
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+        {messages.length === 0 && !isStreaming && (
+          <div className="flex flex-col items-center justify-center py-12 text-center text-text-secondary">
+            <Sparkles size={24} className="mb-3 text-accent/50" />
+            <p className="text-sm">Preparing your track analysis...</p>
+          </div>
+        )}
+
         {messages.map((msg) => (
           <ChatMessage key={msg.id} message={msg} />
         ))}
@@ -172,7 +167,7 @@ export function ChatPanel() {
       </div>
 
       {/* Input */}
-      <div className="border-t border-border bg-bg-secondary p-3">
+      <div className="border-t border-border bg-bg-secondary p-3 px-6">
         <div className="flex items-end gap-2">
           <textarea
             value={input}
