@@ -7,6 +7,8 @@ from pydantic import ValidationError
 from app.models.render import RenderEditRequest, RenderSpec
 from app.services.ai_image_service import AIImageService
 from app.services.render_service import RenderService
+from app.services.shader_render_service import ShaderRenderService
+from app.services.llm_service import LLMService
 from app.services.storage import job_store
 
 router = APIRouter()
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Valid values for Literal-typed fields — used to coerce LLM hallucinations
 _VALID_TEMPLATES = {
-    "nebula", "geometric", "waveform", "cinematic", "retro",
+    "shader", "nebula", "geometric", "waveform", "cinematic", "retro",
     "nature", "abstract", "urban", "glitchbreak", "90s-anime",
 }
 _VALID_MOTIONS = {
@@ -36,7 +38,7 @@ def _sanitize_render_spec(spec: dict) -> dict:
     # Sanitize globalStyle / global_style
     gs = spec.get("globalStyle") or spec.get("global_style") or {}
     if gs.get("template") not in _VALID_TEMPLATES:
-        gs["template"] = "nebula"
+        gs["template"] = "shader"
 
     # Sanitize sections
     for sec in spec.get("sections", []):
@@ -107,78 +109,54 @@ async def start_render(req: Request) -> dict:
         "percentage": 0,
     })
 
-    # Check if AI keyframes / video were requested (stored by chat handler)
-    use_ai = job.get("use_ai_keyframes", False)
-    use_ai_video = job.get("use_ai_video", False)
+    audio_path = job.get("path", "")
 
-    render_service = RenderService()
-    keyframe_paths: dict[str, str] = {}
-    video_clip_paths: dict[str, str] = {}
+    # Check if we have shader code (from the job or generate from shader description)
+    shader_code = job.get("shader_code")
+    shader_desc = render_spec.global_style.shader_description
 
     try:
-        ai_service: AIImageService | None = None
-
-        # Step 1: Generate AI keyframes if requested
-        if (use_ai or use_ai_video) and render_spec.sections:
+        # Step 1: Generate shader code if we have a description but no code
+        if not shader_code and shader_desc:
             job_store.update_job(render_id, {
-                "status": "generating_keyframes",
+                "status": "generating_shader",
                 "percentage": 5,
             })
-            logger.info("Generating AI keyframes for render %s", render_id)
-
-            ai_service = AIImageService()
-            try:
-                aspect = render_spec.export_settings.aspect_ratio
-                keyframe_paths = await ai_service.generate_keyframes(
-                    sections=render_spec.sections,
-                    global_style=render_spec.global_style,
-                    aspect_ratio=aspect,
-                )
-            except Exception:
-                logger.exception("AI keyframe generation failed, continuing with procedural")
-
-        # Step 2: Generate AI video clips from keyframes (if requested)
-        if use_ai_video and keyframe_paths:
-            job_store.update_job(render_id, {
-                "status": "generating_videos",
-                "percentage": 15,
-            })
-            logger.info(
-                "Generating AI video clips for render %s (%d keyframes)",
-                render_id, len(keyframe_paths),
+            logger.info("Generating shader for render %s", render_id)
+            llm = LLMService()
+            shader_code = await llm.generate_shader(
+                description=shader_desc,
+                mood_tags=analysis.get("mood", {}).get("tags", []),
             )
 
-            if ai_service is None:
-                ai_service = AIImageService()
-            try:
-                video_clip_paths = await ai_service.generate_video_clips(
-                    keyframe_paths=keyframe_paths,
-                )
-            except Exception:
-                logger.exception(
-                    "AI video clip generation failed, falling back to keyframe images"
-                )
-
-        if ai_service:
-            await ai_service.close()
-
-        # Step 3: Render the video
-        render_pct = 50 if use_ai_video else (30 if use_ai else 10)
+        # Step 2: Render the video
         job_store.update_job(render_id, {
             "status": "rendering",
-            "percentage": render_pct,
+            "percentage": 20,
         })
 
-        audio_path = job.get("path", "")
-        result = await render_service.render_video(
-            render_id=render_id,
-            audio_path=audio_path,
-            analysis=analysis,
-            render_spec=render_spec,
-            lyrics=job.get("lyrics"),
-            keyframe_paths=keyframe_paths if keyframe_paths else None,
-            video_clip_paths=video_clip_paths if video_clip_paths else None,
-        )
+        if shader_code:
+            # Use headless WebGL shader rendering
+            logger.info("Using shader render pipeline for %s", render_id)
+            shader_service = ShaderRenderService()
+            result = await shader_service.render_shader_video(
+                render_id=render_id,
+                audio_path=audio_path,
+                analysis=analysis,
+                render_spec=render_spec,
+                shader_code=shader_code,
+            )
+        else:
+            # Fallback to FFmpeg procedural pipeline
+            logger.info("No shader code available, using FFmpeg fallback for %s", render_id)
+            render_service = RenderService()
+            result = await render_service.render_video(
+                render_id=render_id,
+                audio_path=audio_path,
+                analysis=analysis,
+                render_spec=render_spec,
+                lyrics=job.get("lyrics"),
+            )
 
         job_store.update_job(render_id, {
             "status": "complete",
