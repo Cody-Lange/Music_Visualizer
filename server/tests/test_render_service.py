@@ -88,19 +88,24 @@ class TestFullFilterGraph:
         filt = self.service._build_full_filter_graph(
             spec, "geometric", 10.0, 1920, 1080, 30, beats, {}
         )
-        assert "beat_fl" in filt
-        assert "blend" in filt
+        # Beat flash is now a drawbox with enable, applied inline to [vmain]
+        assert "drawbox=" in filt
+        assert "white@0.12" in filt
 
-    def test_beat_flash_uses_comparison_operators(self):
-        """Beat flash must use (T>=a)*(T<=b) — no commas, uppercase T for geq."""
-        result = self.service._beat_flash([1.0, 2.5], 10.0, 1920, 1080, 30)
+    def test_beat_flash_filter_uses_enable_between(self):
+        """Beat flash uses drawbox with enable='between(t,...)' — no geq, no blend."""
+        result = RenderService._beat_flash_filter([1.0, 2.5], 1920, 1080, 30)
         assert result is not None
-        assert "geq" in result
-        # Must use uppercase T (geq variable) not lowercase t (enable variable)
-        assert "(T>=" in result
-        assert "(T<=" in result
-        # Must not contain between() — commas break FFmpeg filter parsing
-        assert "between" not in result
+        assert "drawbox=" in result
+        assert "white@0.12" in result
+        # Uses enable with between(t,...) — proven approach from _simple_section_filters
+        assert "enable=" in result
+        assert "between(t," in result
+        # Must NOT use geq or blend (which caused format mismatch failures)
+        assert "geq" not in result
+
+    def test_beat_flash_filter_empty_beats(self):
+        assert RenderService._beat_flash_filter([], 1920, 1080, 30) is None
 
 
 class TestProceduralEffect:

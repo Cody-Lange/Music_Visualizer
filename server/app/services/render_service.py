@@ -95,12 +95,6 @@ class RenderService:
         template = render_spec.global_style.template
         beats = analysis.get("rhythm", {}).get("beats", [])
 
-        # Try the full filter graph first; fall back to simple if it fails
-        filter_complex = self._build_full_filter_graph(
-            render_spec, template, duration, width, height, fps, beats,
-            keyframe_paths or {},
-        )
-
         # Count additional inputs (AI keyframe images)
         extra_inputs: list[str] = []
         if keyframe_paths:
@@ -109,49 +103,63 @@ class RenderService:
                 if kf and Path(kf).exists():
                     extra_inputs.extend(["-loop", "1", "-t", str(duration), "-i", kf])
 
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "lavfi",
-            "-i", f"color=c=black:s={width}x{height}:d={duration}:r={fps}",
-            *extra_inputs,
-            "-i", audio_path,
-            "-filter_complex", filter_complex,
-            "-map", "[vout]",
-            "-map", f"{1 + len(extra_inputs) // 4}:a",
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "21",
-            "-pix_fmt", "yuv420p",
-            "-c:a", "aac",
-            "-b:a", "192k",
-            "-movflags", "+faststart",
-            "-shortest",
-            str(output_path),
-        ]
-
         logger.info(
             "Starting FFmpeg render: %s (template=%s, sections=%d)",
             render_id, template, len(render_spec.sections),
         )
 
-        try:
-            result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600, check=False,
+        # Graceful degradation: full graph → full without beats → simple → minimal
+        for attempt_label, use_beats in [("full", True), ("full-no-beats", False)]:
+            filter_complex = self._build_full_filter_graph(
+                render_spec, template, duration, width, height, fps,
+                beats if use_beats else [],
+                keyframe_paths or {},
             )
-            if result.returncode != 0:
-                logger.warning(
-                    "Full render failed, falling back: %s",
-                    result.stderr[-500:] if result.stderr else "unknown",
-                )
-                return await self._fallback_render(
-                    render_id, audio_path, analysis, render_spec, output_path,
-                )
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError("Render timed out after 10 minutes") from e
 
-        download_url = f"/storage/renders/{render_id}.mp4"
-        logger.info("Render complete: %s -> %s", render_id, download_url)
-        return {"download_url": download_url}
+            cmd = [
+                "ffmpeg", "-y",
+                "-f", "lavfi",
+                "-i", f"color=c=black:s={width}x{height}:d={duration}:r={fps}",
+                *extra_inputs,
+                "-i", audio_path,
+                "-filter_complex", filter_complex,
+                "-map", "[vout]",
+                "-map", f"{1 + len(extra_inputs) // 4}:a",
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "21",
+                "-pix_fmt", "yuv420p",
+                "-c:a", "aac",
+                "-b:a", "192k",
+                "-movflags", "+faststart",
+                "-shortest",
+                str(output_path),
+            ]
+
+            try:
+                result = subprocess.run(
+                    cmd, capture_output=True, text=True, timeout=600, check=False,
+                )
+                if result.returncode == 0:
+                    if attempt_label != "full":
+                        logger.info("Render succeeded with %s strategy", attempt_label)
+                    download_url = f"/storage/renders/{render_id}.mp4"
+                    logger.info("Render complete: %s -> %s", render_id, download_url)
+                    return {"download_url": download_url}
+
+                logger.warning(
+                    "Render attempt '%s' failed:\n%s",
+                    attempt_label,
+                    result.stderr[-2000:] if result.stderr else "unknown",
+                )
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError("Render timed out after 10 minutes") from e
+
+        # Both full attempts failed — use simple section-color fallback
+        logger.warning("Full render strategies exhausted, using simple fallback")
+        return await self._fallback_render(
+            render_id, audio_path, analysis, render_spec, output_path,
+        )
 
     # ── Full filter graph ────────────────────────────────────────────────
 
@@ -235,12 +243,10 @@ class RenderService:
         filters.append(f"{concat_in}concat=n={n}:v=1:a=0[vmain]")
 
         # ── Beat-synced flash overlay ──
-        beat_flash = self._beat_flash(beats, duration, width, height, fps)
+        beat_flash = self._beat_flash_filter(beats, width, height, fps)
         if beat_flash:
-            filters.append(beat_flash)
-            filters.append(
-                "[vmain][beat_fl]blend=all_mode=addition:all_opacity=0.12[vout]"
-            )
+            # Apply directly to the main stream — no separate source/blend
+            filters.append(f"[vmain]{beat_flash}[vout]")
         else:
             filters.append("[vmain]null[vout]")
 
@@ -298,28 +304,27 @@ class RenderService:
 
     # ── Beat flash ───────────────────────────────────────────────────────
 
-    def _beat_flash(
-        self,
+    @staticmethod
+    def _beat_flash_filter(
         beats: list[float],
-        duration: float,
-        w: int,
-        h: int,
+        width: int,
+        height: int,
         fps: int,
     ) -> str | None:
+        """Return a drawbox filter that flashes white on beat hits.
+
+        Uses enable='between(t,a,b)+...' which is the same proven
+        approach as _simple_section_filters.  Applies directly to the
+        main video stream — no separate source, no blend, no format
+        mismatch risk.
+        """
         if not beats:
             return None
 
-        # Limit to 50 beats to keep the geq expression within FFmpeg limits.
-        #
-        # Two critical details for geq expressions:
-        #   1. Time variable is T (uppercase), NOT t — geq has its own
-        #      variable namespace separate from the general 'enable' context.
-        #   2. Commas inside geq expressions are misinterpreted as filter
-        #      chain separators regardless of quoting.  Use comparison
-        #      operators instead: (T>=a)*(T<=b) ≡ between(T,a,b).
         flash_dur = 2.0 / fps
+        # Limit beats to keep the enable expression within FFmpeg limits.
         parts = [
-            f"(T>={b:.3f})*(T<={b + flash_dur:.3f})"
+            f"between(t,{b:.3f},{b + flash_dur:.3f})"
             for b in beats[:50]
         ]
         if not parts:
@@ -327,8 +332,8 @@ class RenderService:
 
         expr = "+".join(parts)
         return (
-            f"color=c=white:s={w}x{h}:d={duration}:r={fps},"
-            f"geq=lum='255*({expr})':cb=128:cr=128[beat_fl]"
+            f"drawbox=x=0:y=0:w={width}:h={height}"
+            f":color=white@0.12:t=fill:enable='{expr}'"
         )
 
     # ── Fallback (simple render) ─────────────────────────────────────────

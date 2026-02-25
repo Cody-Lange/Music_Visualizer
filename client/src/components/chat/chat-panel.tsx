@@ -180,6 +180,9 @@ export function ChatPanel() {
             .then((r) => r.json())
             .then((d) => { if (d.download_url) setDownloadUrl(d.download_url); });
         }
+        setRenderStatus("complete");
+        setRenderProgress(100, "Complete!");
+        setPhase("editing");
         setView("editor");
       })
       .catch((err) => {
