@@ -227,6 +227,44 @@ class LLMService:
             self._client = genai.Client(api_key=api_key)
         return self._client
 
+    @staticmethod
+    def _build_history(
+        messages: list[ChatMessage],
+        audio_context: str = "",
+    ) -> list[types.Content]:
+        """Convert ChatMessages into Gemini Content objects.
+
+        If *audio_context* is provided it is prepended to the first user
+        message so the LLM has full analysis data on every call.
+        """
+        history: list[types.Content] = []
+
+        if audio_context and messages:
+            first_msg = messages[0]
+            augmented = (
+                f"{audio_context}\n\n---\n\nUser request: {first_msg.content}"
+            )
+            history.append(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=augmented)],
+                )
+            )
+            remaining = messages[1:]
+        else:
+            remaining = list(messages)
+
+        for msg in remaining:
+            role = "user" if msg.role == "user" else "model"
+            history.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg.content)],
+                )
+            )
+
+        return history
+
     async def stream_chat(
         self,
         messages: list[ChatMessage],
@@ -242,35 +280,7 @@ class LLMService:
 
         client = self._get_client()
 
-        # Build the conversation history as Content objects
-        history: list[types.Content] = []
-
-        if audio_context and messages:
-            first_msg = messages[0]
-            augmented_content = f"{audio_context}\n\n---\n\nUser request: {first_msg.content}"
-            history.append(
-                types.Content(
-                    role="user",
-                    parts=[types.Part.from_text(text=augmented_content)],
-                )
-            )
-            for msg in messages[1:]:
-                role = "user" if msg.role == "user" else "model"
-                history.append(
-                    types.Content(
-                        role=role,
-                        parts=[types.Part.from_text(text=msg.content)],
-                    )
-                )
-        else:
-            for msg in messages:
-                role = "user" if msg.role == "user" else "model"
-                history.append(
-                    types.Content(
-                        role=role,
-                        parts=[types.Part.from_text(text=msg.content)],
-                    )
-                )
+        history = self._build_history(messages, audio_context)
 
         # The last message is the new user input — remove from history for send_message
         last_content = history.pop()
@@ -367,25 +377,7 @@ End with 1-2 follow-up questions to refine the concept."""
         """
         client = self._get_client()
 
-        # Build history with audio context
-        history: list[types.Content] = []
-        if audio_context and messages:
-            first_msg = messages[0]
-            augmented = f"{audio_context}\n\n---\n\nUser request: {first_msg.content}"
-            history.append(
-                types.Content(role="user", parts=[types.Part.from_text(text=augmented)])
-            )
-            for msg in messages[1:]:
-                role = "user" if msg.role == "user" else "model"
-                history.append(
-                    types.Content(role=role, parts=[types.Part.from_text(text=msg.content)])
-                )
-        else:
-            for msg in messages:
-                role = "user" if msg.role == "user" else "model"
-                history.append(
-                    types.Content(role=role, parts=[types.Part.from_text(text=msg.content)])
-                )
+        history = self._build_history(messages, audio_context)
 
         # Add the extraction prompt as a final user message
         history.append(
