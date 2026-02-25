@@ -11,7 +11,13 @@ services:
       - storage_data:/app/data/storage
     depends_on:
       - redis
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    command: >-
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      --reload-exclude ".pytest_cache"
+      --reload-exclude "__pycache__"
+      --reload-exclude ".mypy_cache"
+      --reload-exclude ".ruff_cache"
+      --reload-exclude "data"
 
   worker:
     build: ./server
