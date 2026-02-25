@@ -44,9 +44,13 @@ services:
       dockerfile: Dockerfile
     ports:
       - "5173:5173"
+    environment:
+      - VITE_API_URL=http://server:8000
     volumes:
       - ./client:/app
       - /app/node_modules
+    depends_on:
+      - server
     command: npm run dev -- --host 0.0.0.0
 
 volumes:
