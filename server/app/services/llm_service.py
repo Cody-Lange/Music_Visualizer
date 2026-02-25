@@ -284,7 +284,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 
 ## EXAMPLE 2 — fbm Noise Landscape
 
-float hash(vec2 p) {
+float hashFn(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
@@ -293,8 +293,8 @@ float noise(vec2 p) {
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
     return mix(
-        mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
-        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+        mix(hashFn(i), hashFn(i + vec2(1.0, 0.0)), f.x),
+        mix(hashFn(i + vec2(0.0, 1.0)), hashFn(i + vec2(1.0, 1.0)), f.x),
         f.y);
 }
 
@@ -334,6 +334,21 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 4. for-loop bounds must be compile-time constants
 5. float functions return float, vec3 functions return vec3
 
+## NVIDIA COMPATIBILITY — CRITICAL
+
+NVIDIA's GLSL compiler is STRICT. These patterns compile on Mesa \
+but CRASH on NVIDIA. NEVER use them:
+
+- NEVER write `void(expr);` or `void();` — void is NOT a \
+  constructor. To discard a return value, just call the function: \
+  `myFunc();` not `void(myFunc());`
+- NEVER write `return void;` or `return void(expr);` — in void \
+  functions just write `return;`
+- NEVER name a function `hash` — it collides with an NVIDIA \
+  built-in. Use `hashFn` or `hash21` or `hash13` instead.
+- NEVER pass `void` as an argument: `foo(void)` is only valid \
+  in declarations, not calls.
+
 ## OUTPUT
 
 Output ONLY valid GLSL code. No markdown fences, no backticks, \
@@ -371,6 +386,22 @@ _RE_DOUBLE_BRACE_CLOSE = _re.compile(r"\}\}")
 _logger = logging.getLogger(__name__)
 
 
+def _find_matching_paren(s: str, start: int) -> int:
+    """Return index of the closing ')' matching the '(' at *start*.
+
+    Handles nested parentheses.  Returns -1 when unmatched.
+    """
+    depth = 0
+    for i in range(start, len(s)):
+        if s[i] == "(":
+            depth += 1
+        elif s[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
 def _strip_void_expressions(code: str) -> str:
     """Remove all void-as-expression patterns from GLSL code.
 
@@ -379,6 +410,9 @@ def _strip_void_expressions(code: str) -> str:
     this type" — even though Mesa accepts them.  This function
     aggressively strips ALL such patterns line-by-line so the shader
     is cross-driver compatible.
+
+    Uses balanced-paren matching to handle nested calls like
+    ``void(sin(x * 2.0))`` correctly.
     """
     lines = code.split("\n")
     fixed: list[str] = []
@@ -392,29 +426,82 @@ def _strip_void_expressions(code: str) -> str:
             fixed.append(line)
             continue
 
-        # ── Remove standalone void expression statements ─────────
-        # Lines like: `void();`  `void(1.0);`  `void(someExpr);`
-        if _re.match(r"^\s*void\s*\([^)]*\)\s*;?\s*$", stripped):
-            _logger.debug("Stripped void expression: %s", stripped)
-            continue
+        # ── Remove standalone void(...) expression statements ────
+        # Match `void(` then find its balanced `)`, check if that's
+        # the whole statement (possibly with trailing `;`).
+        m_void_stmt = _re.match(r"^(\s*)void\s*\(", line)
+        if m_void_stmt:
+            paren_start = line.index("(", m_void_stmt.start())
+            paren_end = _find_matching_paren(line, paren_start)
+            if paren_end != -1:
+                after = line[paren_end + 1:].strip()
+                if after in ("", ";"):
+                    _logger.debug(
+                        "Stripped void expression: %s", stripped,
+                    )
+                    continue
 
-        # ── Fix `return void;` → `return;` ──────────────────────
-        line = _re.sub(
-            r"\breturn\s+void\s*(?:\([^)]*\)\s*)?;",
-            "return;",
-            line,
-        )
+        # ── Fix `return void;` and `return void(...)` → `return;`
+        m_ret = _re.search(r"\breturn\s+void\b", line)
+        if m_ret:
+            # Check for `return void(...)` with balanced parens
+            after_void = line[m_ret.end():]
+            m_paren = _re.match(r"\s*\(", after_void)
+            if m_paren:
+                paren_idx = m_ret.end() + after_void.index("(")
+                paren_close = _find_matching_paren(line, paren_idx)
+                if paren_close != -1:
+                    line = (
+                        line[:m_ret.start()]
+                        + "return"
+                        + line[paren_close + 1:]
+                    )
+            else:
+                line = _re.sub(
+                    r"\breturn\s+void\s*;", "return;", line,
+                )
 
         # ── Fix `func(void)` calls → `func()` ──────────────────
         # In GLSL, void as a function argument is invalid in calls.
         line = _re.sub(r"(\w+\s*\(\s*)void(\s*\))", r"\1\2", line)
 
         # ── Fix void cast in expression: `void(expr)` → `expr` ──
-        # e.g., `x = void(y);` → `x = y;`
-        line = _re.sub(r"\bvoid\s*\(([^)]+)\)", r"\1", line)
+        # Use balanced-paren matching for nested calls.
+        while True:
+            m_cast = _re.search(r"\bvoid\s*\(", line)
+            if not m_cast:
+                break
+            # Skip if this is a function declaration
+            before = line[:m_cast.start()].rstrip()
+            if not before or _re.match(
+                r"^void\s+\w+\s*$", line[:m_cast.end()],
+            ):
+                break
+            paren_start = m_cast.end() - 1
+            paren_end = _find_matching_paren(line, paren_start)
+            if paren_end == -1:
+                break
+            inner = line[paren_start + 1:paren_end]
+            line = line[:m_cast.start()] + inner + line[paren_end + 1:]
 
         fixed.append(line)
     return "\n".join(fixed)
+
+
+def _rename_nvidia_reserved(code: str) -> str:
+    """Rename user-defined functions that collide with NVIDIA built-ins.
+
+    NVIDIA's GLSL compiler exposes ``hash`` as a built-in in some
+    extension contexts, causing 'no matching overloaded function
+    found' when user code defines ``float hash(vec2 p)``.  We
+    rename all occurrences to ``hashFn`` to avoid the collision.
+    """
+    # Only rename if the user actually defines hash as a function
+    if not _re.search(r"\b(?:float|vec[234]|int)\s+hash\s*\(", code):
+        return code
+    # Rename the definition + all call sites
+    code = _re.sub(r"\bhash\b", "hashFn", code)
+    return code
 
 
 def _fix_missing_semicolons(code: str) -> str:
@@ -459,6 +546,7 @@ def sanitize_shader_code(raw: str) -> str:
     - Duplicate uniform / out / #version / precision declarations
     - Wrapper void main() that the host already provides
     - ALL void-as-expression patterns (NVIDIA compat)
+    - NVIDIA reserved name collisions (``hash`` → ``hashFn``)
     - Double braces ``{{`` / ``}}``
     - Missing semicolons before function declarations
     - Stray backslash line continuations
@@ -488,6 +576,10 @@ def sanitize_shader_code(raw: str) -> str:
     # This is the big one: NVIDIA rejects void(expr), void(),
     # return void;, func(void) — even though Mesa accepts them.
     code = _strip_void_expressions(code)
+
+    # ── Rename NVIDIA reserved names ─────────────────────────
+    # NVIDIA exposes `hash` as a built-in; user defs collide.
+    code = _rename_nvidia_reserved(code)
 
     # ── Fix double braces {{ → { and }} → } ─────────────────
     code = _RE_DOUBLE_BRACE_OPEN.sub("{", code)
@@ -852,6 +944,10 @@ End with 1-2 follow-up questions to refine the concept."""
             "makes the image more beautiful.\n\n"
             "Every audio uniform should drive some visual "
             "parameter. Make it breathtaking.\n\n"
+            "CRITICAL: Do NOT use void() as a constructor "
+            "or expression. Do NOT name any function 'hash' "
+            "(use 'hashFn' instead). Do NOT write "
+            "'return void;'.\n\n"
             "Output ONLY GLSL code."
         )
         return await self._call_shader_llm(prompt, temperature=0.85)
@@ -926,9 +1022,26 @@ End with 1-2 follow-up questions to refine the concept."""
                 )
         elif "cannot construct this type" in error_lower:
             specific_advice = (
-                "You wrote `return void;` or `return void(...)`. "
-                "In void functions, just use `return;` with "
-                "no value.\n\n"
+                "NVIDIA ERROR: You used `void` as a constructor or "
+                "expression. Common causes:\n"
+                "- `void(expr);` — just call the function directly\n"
+                "- `return void;` or `return void(expr);` — use "
+                "`return;` with no value\n"
+                "- `void();` — remove the line entirely\n"
+                "Find EVERY `void(` that is NOT a function "
+                "declaration and remove/fix it.\n\n"
+            )
+        elif "no matching overloaded function" in error_lower:
+            fn_match = _re.search(
+                r"'(\w+)'\s*:\s*no matching overloaded",
+                compile_error,
+            )
+            fn_name = fn_match.group(1) if fn_match else "unknown"
+            specific_advice = (
+                f"NVIDIA ERROR: '{fn_name}' collides with an NVIDIA "
+                f"built-in function. Rename your function to "
+                f"'{fn_name}Fn' everywhere (definition + all calls)."
+                f"\n\n"
             )
         elif "cannot convert return value" in error_lower:
             specific_advice = (
@@ -951,6 +1064,10 @@ End with 1-2 follow-up questions to refine the concept."""
             "REMEMBER: The wrapper provides #version 330, "
             "all uniforms, out vec4 fragColor, and void "
             "main(). Do NOT redeclare those.\n\n"
+            "NVIDIA RULES: Never use void() as constructor/"
+            "expression. Never write 'return void;'. Never "
+            "name a function 'hash' (use 'hashFn'). These "
+            "all crash on NVIDIA GPUs.\n\n"
             "Output ONLY the complete corrected GLSL code. "
             "No markdown fences, no explanation."
         )
@@ -979,6 +1096,9 @@ End with 1-2 follow-up questions to refine the concept."""
             "tunnel effects. Keep under 80 lines.\n\n"
             "Every audio uniform should drive a visual "
             "parameter. Make it look gorgeous.\n\n"
+            "CRITICAL: Do NOT use void() as a constructor. "
+            "Do NOT name any function 'hash' (use 'hashFn'). "
+            "Do NOT write 'return void;'.\n\n"
             "Output ONLY GLSL code. No markdown."
         )
         return await self._call_shader_llm(prompt, temperature=0.6)

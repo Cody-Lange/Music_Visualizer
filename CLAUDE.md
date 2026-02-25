@@ -158,6 +158,40 @@ COMFYUI_API_URL=         # Self-hosted AI image/video generation
 
 See `.context/api-integrations.md` for the full list with auth details, rate limits, and costs.
 
+## Current Status & Known Issues
+
+### Working End-to-End
+- Audio upload → Librosa analysis (BPM, beats, sections, spectral features, key, mood)
+- Conversational flow: user prompt → Gemini thematic analysis → refinement → render spec extraction
+- LLM-generated GLSL shader: Gemini generates a Shadertoy-compatible fragment shader from the render spec's `shaderDescription`
+- Real-time preview: Three.js/WebGL renders the shader in the browser with audio-reactive uniforms
+- Production render: ModernGL headless renders the same shader frame-by-frame → FFmpeg → MP4
+- Progressive retry pipeline: generate → compile-check → fix (x3) → fresh gen → final fix → curated fallback
+
+### NVIDIA GPU Compatibility (Critical)
+The server-side shader pipeline runs on ModernGL with the host GPU's GLSL compiler. NVIDIA's compiler is significantly stricter than Mesa/Intel. Key issues and mitigations:
+
+1. **`void()` as expression/constructor** — NVIDIA rejects `void(expr);`, `void();`, `return void;` which Mesa silently accepts. The sanitizer (`_strip_void_expressions` in `llm_service.py`) uses balanced-paren matching to strip all such patterns, and the NVIDIA static checker (`_nvidia_static_check` in `shader_render_service.py`) catches anything that slips through.
+
+2. **`hash` function name collision** — NVIDIA exposes `hash` as a built-in; user-defined `float hash(vec2 p)` causes "no matching overloaded function found". The sanitizer renames `hash` → `hashFn` via `_rename_nvidia_reserved()`.
+
+3. **Missing semicolons** — The LLM sometimes omits semicolons before function declarations, causing `unexpected VOID` errors. The sanitizer (`_fix_missing_semicolons`) detects and inserts them.
+
+4. **Defense-in-depth in `_try_compile()`** — Every compile attempt runs: `sanitize_shader_code()` → `_nvidia_static_check()` → actual GL compile. This ensures patterns are caught even on Mesa servers.
+
+5. **LLM prompt guardrails** — `SHADER_SYSTEM_PROMPT` has an explicit "NVIDIA COMPATIBILITY" section forbidding void constructors, `hash` as a name, and `return void`. All generation and fix prompts reinforce these rules.
+
+If shaders still fail to compile on NVIDIA, the relevant files are:
+- `server/app/services/llm_service.py` — `SHADER_SYSTEM_PROMPT`, `sanitize_shader_code()`, `_strip_void_expressions()`, `_rename_nvidia_reserved()`
+- `server/app/services/shader_render_service.py` — `_nvidia_static_check()`, `_try_compile()`
+- `server/app/api/shader.py` — `_generate_and_validate()` retry pipeline
+
+### Shader Architecture
+- **Client wrapper** (WebGL 1.0): `precision highp float;` + uniforms + `void main() { mainImage(gl_FragColor, gl_FragCoord.xy); }` — in `client/src/components/visualizer/scenes/shader-scene.tsx`
+- **Server wrapper** (GLSL 330): `#version 330` + `precision highp float;` + uniforms + `out vec4 fragColor;` + `void main() { mainImage(fragColor, gl_FragCoord.xy); }` — in `server/app/services/shader_render_service.py` (`_FRAGMENT_WRAPPER`)
+- Both wrappers expect user code to define `void mainImage(out vec4 fragColor, in vec2 fragCoord)`
+- 10 audio uniforms: `iTime`, `iResolution`, `u_bass`, `u_lowMid`, `u_mid`, `u_highMid`, `u_treble`, `u_energy`, `u_beat`, `u_spectralCentroid`
+
 ## Coding Conventions
 
 ### TypeScript (Frontend)

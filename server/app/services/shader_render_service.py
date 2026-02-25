@@ -380,6 +380,15 @@ class ShaderRenderService:
                         f"— {stripped}"
                     )
 
+        # ── Reserved function names on NVIDIA ────────────────
+        if _re.search(
+            r"\b(?:float|vec[234]|int)\s+hash\s*\(", shader_code,
+        ):
+            return (
+                "NVIDIA compat: function 'hash' collides with "
+                "NVIDIA built-in — rename to 'hashFn'"
+            )
+
         return None
 
     @staticmethod
