@@ -309,10 +309,12 @@ class RenderService:
         if not beats:
             return None
 
-        # Limit to 50 beats to keep the geq expression within FFmpeg limits
+        # Limit to 50 beats to keep the geq expression within FFmpeg limits.
+        # Commas are safe here — the expression is inside single quotes in the
+        # geq filter, so FFmpeg's filter parser won't split on them.
         flash_dur = 2.0 / fps
         parts = [
-            f"between(t\\,{b:.3f}\\,{b + flash_dur:.3f})"
+            f"between(t,{b:.3f},{b + flash_dur:.3f})"
             for b in beats[:50]
         ]
         if not parts:

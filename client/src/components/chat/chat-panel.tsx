@@ -111,7 +111,13 @@ export function ChatPanel() {
   const analysis = useAnalysisStore((s) => s.analysis);
   const isAnalyzing = useAnalysisStore((s) => s.isAnalyzing);
 
-  const renderStore = useRenderStore();
+  const renderError = useRenderStore((s) => s.error);
+  const resetRender = useRenderStore((s) => s.reset);
+  const setRenderStatus = useRenderStore((s) => s.setStatus);
+  const setRenderProgress = useRenderStore((s) => s.setProgress);
+  const setRenderId = useRenderStore((s) => s.setRenderId);
+  const setDownloadUrl = useRenderStore((s) => s.setDownloadUrl);
+  const setRenderError = useRenderStore((s) => s.setError);
 
   const { sendMessage, isConnected } = useChatWs();
 
@@ -133,70 +139,62 @@ export function ChatPanel() {
   }, [analysis, isConnected, initialAnalysisSent, setInitialAnalysisSent, sendMessage]);
 
   // When phase transitions to "rendering" and we have a render spec,
-  // trigger the actual render and navigate to editor on success
+  // trigger the actual render and navigate to editor on success.
+  // Dependencies are only the values/actions we read — stable Zustand
+  // selectors won't trigger spurious re-runs.
   useEffect(() => {
-    if (phase === "rendering" && renderSpec && !renderTriggered.current) {
-      renderTriggered.current = true;
+    if (phase !== "rendering" || !renderSpec || renderTriggered.current) return;
+    if (!jobId) return;
 
-      if (jobId) {
-        renderStore.reset();
-        renderStore.setStatus("rendering");
-        renderStore.setProgress(0, "Starting render...");
+    renderTriggered.current = true;
 
-        // Strip useAiKeyframes — it's stored separately on the job
-        const { useAiKeyframes: _, ...cleanSpec } = renderSpec as unknown as Record<string, unknown>;
+    resetRender();
+    setRenderStatus("rendering");
+    setRenderProgress(0, "Starting render...");
 
-        fetch("/api/render/start", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            jobId,
-            renderSpec: cleanSpec,
-          }),
-        })
-          .then(async (res) => {
-            if (!res.ok) {
-              let detail = `HTTP ${res.status}`;
-              try {
-                const errBody = await res.json();
-                detail = errBody.detail || JSON.stringify(errBody);
-              } catch { /* ignore parse errors */ }
-              throw new Error(detail);
-            }
-            return res.json();
-          })
-          .then((data) => {
-            if (data.render_id) {
-              renderStore.setRenderId(data.render_id);
-            }
-            if (data.download_url) {
-              renderStore.setDownloadUrl(data.download_url);
-            } else if (data.render_id && data.status === "complete") {
-              fetch(`/api/render/${data.render_id}/download`)
-                .then((r) => r.json())
-                .then((d) => {
-                  if (d.download_url) {
-                    renderStore.setDownloadUrl(d.download_url);
-                  }
-                });
-            }
-            setView("editor");
-          })
-          .catch((err) => {
-            console.error("Render error:", err);
-            renderStore.setError(String(err));
-            renderTriggered.current = false;
-            setPhase("confirmation");
-            addMessage({
-              id: createMessageId(),
-              role: "system",
-              content: `Render failed: ${err.message ?? err}. You can try again using the buttons below.`,
-              timestamp: Date.now(),
-            });
-          });
-      }
-    }
-  }, [phase, renderSpec, setView, setPhase, jobId, renderStore, addMessage]);
+    // Strip useAiKeyframes — it's stored separately on the job
+    const { useAiKeyframes: _, ...cleanSpec } = renderSpec as unknown as Record<string, unknown>;
+
+    fetch("/api/render/start", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ jobId, renderSpec: cleanSpec }),
+    })
+      .then(async (res) => {
+        if (!res.ok) {
+          let detail = `HTTP ${res.status}`;
+          try {
+            const errBody = await res.json();
+            detail = errBody.detail || JSON.stringify(errBody);
+          } catch { /* ignore parse errors */ }
+          throw new Error(detail);
+        }
+        return res.json();
+      })
+      .then((data) => {
+        if (data.render_id) setRenderId(data.render_id);
+        if (data.download_url) {
+          setDownloadUrl(data.download_url);
+        } else if (data.render_id && data.status === "complete") {
+          fetch(`/api/render/${data.render_id}/download`)
+            .then((r) => r.json())
+            .then((d) => { if (d.download_url) setDownloadUrl(d.download_url); });
+        }
+        setView("editor");
+      })
+      .catch((err) => {
+        console.error("Render error:", err);
+        setRenderError(String(err));
+        renderTriggered.current = false;
+        setPhase("confirmation");
+        addMessage({
+          id: createMessageId(),
+          role: "system",
+          content: `Render failed: ${err.message ?? err}. You can try again using the buttons below.`,
+          timestamp: Date.now(),
+        });
+      });
+  }, [phase, renderSpec, jobId, setView, setPhase, addMessage, resetRender, setRenderStatus, setRenderProgress, setRenderId, setDownloadUrl, setRenderError]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -266,17 +264,31 @@ export function ChatPanel() {
           <ActionButtons onAction={handleActionButton} />
         )}
 
-        {renderSpec && phase === "rendering" && !renderStore.error && (
-          <div className="mx-auto max-w-md rounded-xl border border-accent/20 bg-accent/5 p-4 text-center">
-            <Clapperboard size={20} className="mx-auto mb-2 text-accent" />
-            <p className="text-sm font-medium text-text-primary">Rendering your video...</p>
-            <p className="mt-1 text-xs text-text-secondary">
-              Template: {(renderSpec as any).globalStyle?.template ?? "—"} | {(renderSpec as any).sections?.length ?? 0} sections
-            </p>
-            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-bg-tertiary">
-              <div className="h-full animate-pulse rounded-full bg-accent/60" style={{ width: "100%" }} />
+        {renderSpec && phase === "rendering" && !renderError && (
+          <div
+            ref={(el) => { el?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
+            className="mx-auto max-w-md rounded-xl border border-accent/20 bg-accent/5 p-5 text-center"
+          >
+            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-accent/10">
+              <Clapperboard size={22} className="animate-pulse text-accent" />
             </div>
-            <p className="mt-2 text-xs text-text-secondary">This may take a moment...</p>
+            <p className="text-sm font-semibold text-text-primary">Rendering your video</p>
+            <p className="mt-1 text-xs text-text-secondary">
+              Template: {(renderSpec as any).globalStyle?.template ?? "—"} &middot; {(renderSpec as any).sections?.length ?? 0} sections
+            </p>
+            <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-bg-tertiary">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-accent to-accent-hover transition-all duration-500"
+                style={{
+                  width: "100%",
+                  animation: "pulse 1.5s ease-in-out infinite",
+                }}
+              />
+            </div>
+            <p className="mt-2 text-xs text-text-secondary">
+              <Loader2 size={10} className="mr-1 inline animate-spin" />
+              Building video — this typically takes 30–60 seconds...
+            </p>
           </div>
         )}
 
