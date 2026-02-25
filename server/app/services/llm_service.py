@@ -257,17 +257,21 @@ You provide ONLY helper functions + mainImage.
 
 1.  NO texture/iChannel/sampler2D/dFdx/dFdy/fwidth
 2.  ALL float literals need a decimal point: 1.0 not 1
-3.  Return types MUST match function signature exactly
-4.  void functions: use `return;` — NEVER `return void;` or `return void(...);`
+3.  Return types MUST match function signature exactly: \
+    float functions return float, vec3 functions return vec3
+4.  void functions: use `return;` — NEVER `return void;` or \
+    `return void(...);`
 5.  Do NOT redeclare uniforms/out vec4 fragColor/void main()
 6.  No #version or precision directives
-7.  Match ALL parentheses and braces — count them carefully
+7.  Every statement ends with a semicolon — especially the \
+    last statement before a closing brace }
 8.  for-loop bounds must be compile-time constants
 9.  Function calls MUST match the defined signature \
     (same number and types of arguments)
-10. NEVER pass an int where a float is expected
+10. NEVER call a function with (void) — use empty parens ()
 11. Every function you CALL must be DEFINED above the call site
 12. Keep total shader under 120 lines for reliability
+13. Match ALL parentheses and braces — count them carefully
 
 ## WORKING EXAMPLE (raymarched scene)
 
@@ -353,9 +357,61 @@ _RE_VOID_MAIN = _re.compile(
 )
 # `return void;` or `return void(...)` — void is not a value in GLSL
 _RE_RETURN_VOID = _re.compile(r"\breturn\s+void\s*(?:\([^)]*\)\s*)?;")
-# Double braces {{ or }} that the LLM may copy from the prompt example
+# Double braces {{ or }} that the LLM may copy from prompt examples
 _RE_DOUBLE_BRACE_OPEN = _re.compile(r"\{\{")
 _RE_DOUBLE_BRACE_CLOSE = _re.compile(r"\}\}")
+# Function CALL with (void) argument — e.g. `foo(void)` → `foo()`
+# Only matches calls, not declarations (declarations have a type before the name)
+_RE_VOID_CALL = _re.compile(r"(\w+\s*\(\s*)void(\s*\))")
+
+_logger = logging.getLogger(__name__)
+
+
+def _fix_missing_semicolons(code: str) -> str:
+    """Insert missing semicolons before void/float/vec/int/mat
+    function declarations.
+
+    The LLM often forgets the semicolon at the end of the last
+    statement in a function body, so the next function declaration
+    (starting with ``void``, ``float``, ``vec3``, etc.) becomes a
+    syntax error like "unexpected VOID, expecting SEMICOLON".
+    """
+    # GLSL type keywords that can start a function declaration
+    type_keywords = {
+        "void", "float", "int", "vec2", "vec3", "vec4",
+        "mat2", "mat3", "mat4", "bool", "ivec2", "ivec3", "ivec4",
+    }
+    lines = code.split("\n")
+    fixed: list[str] = []
+    for i, line in enumerate(lines):
+        fixed.append(line)
+        if i + 1 >= len(lines):
+            continue
+        # Check if next line starts a top-level function declaration
+        next_stripped = lines[i + 1].lstrip()
+        next_first_word = next_stripped.split("(")[0].split()
+        if not next_first_word:
+            continue
+        # A top-level declaration looks like: "void funcName(" or
+        # "float funcName(" at column 0
+        if (
+            lines[i + 1]
+            and not lines[i + 1][0].isspace()
+            and next_first_word[0] in type_keywords
+            and "(" in lines[i + 1]
+        ):
+            # Check if current line looks like it's missing a terminator
+            cur_stripped = line.rstrip()
+            if cur_stripped and cur_stripped[-1] not in (
+                ";", "{", "}", "/", "*", ",", "(", ")",
+            ):
+                # Insert semicolon at the end of current line
+                fixed[-1] = line.rstrip() + ";"
+                _logger.debug(
+                    "Inserted missing semicolon at line %d: %s",
+                    i + 1, fixed[-1].strip(),
+                )
+    return "\n".join(fixed)
 
 
 def sanitize_shader_code(raw: str) -> str:
@@ -366,8 +422,10 @@ def sanitize_shader_code(raw: str) -> str:
     - Duplicate uniform / out / #version / precision declarations
     - Wrapper void main() that the host already provides
     - ``return void;`` and ``return void(...);``
-    - Double braces ``{{`` / ``}}`` (LLM copying from prompt examples)
-    - Stray backslash line continuations (not valid GLSL)
+    - Double braces ``{{`` / ``}}``
+    - ``func(void)`` calls → ``func()``
+    - Missing semicolons before function declarations
+    - Stray backslash line continuations
     """
     code = raw.strip()
 
@@ -393,12 +451,19 @@ def sanitize_shader_code(raw: str) -> str:
     # ── Fix `return void;` / `return void(0);` → `return;` ──
     code = _RE_RETURN_VOID.sub("return;", code)
 
+    # ── Fix `func(void)` calls → `func()` ───────────────────
+    # Only replace when it's clearly a call (no type keyword before)
+    code = _RE_VOID_CALL.sub(r"\1\2", code)
+
     # ── Fix double braces {{ → { and }} → } ─────────────────
     code = _RE_DOUBLE_BRACE_OPEN.sub("{", code)
     code = _RE_DOUBLE_BRACE_CLOSE.sub("}", code)
 
     # ── Strip stray backslash line continuations ─────────────
     code = _re.sub(r"\\\n", "\n", code)
+
+    # ── Fix missing semicolons before function declarations ──
+    code = _fix_missing_semicolons(code)
 
     # ── Collapse excessive blank lines ───────────────────────
     code = _re.sub(r"\n{3,}", "\n\n", code)
@@ -686,7 +751,16 @@ End with 1-2 follow-up questions to refine the concept."""
                     config=config,
                 )
                 raw = response.text.strip()
-                return sanitize_shader_code(raw)
+                logger.debug(
+                    "Raw LLM shader output (%d chars):\n%s",
+                    len(raw), raw[:2000],
+                )
+                sanitized = sanitize_shader_code(raw)
+                logger.debug(
+                    "Sanitized shader (%d chars):\n%s",
+                    len(sanitized), sanitized[:2000],
+                )
+                return sanitized
             except ClientError as e:
                 if e.code == 429 and attempt < max_retries:
                     delay = 15.0
@@ -734,10 +808,19 @@ End with 1-2 follow-up questions to refine the concept."""
             "fractals, fbm noise, etc.) appropriate to the "
             "description. Every audio uniform should drive "
             "some visual parameter.\n\n"
+            "CRITICAL SYNTAX REMINDERS:\n"
+            "- Every statement MUST end with a semicolon\n"
+            "- NEVER write `return void;` — use `return;`\n"
+            "- NEVER call a function with void: "
+            "`foo(void)` is INVALID in GLSL — use `foo()`\n"
+            "- Every function you call must be defined "
+            "ABOVE the call site\n"
+            "- float functions MUST return float, "
+            "vec3 functions MUST return vec3\n\n"
             "Output ONLY GLSL code. No markdown, no "
             "explanation, no uniform declarations."
         )
-        return await self._call_shader_llm(prompt, temperature=0.85)
+        return await self._call_shader_llm(prompt, temperature=0.75)
 
     async def fix_shader(
         self,

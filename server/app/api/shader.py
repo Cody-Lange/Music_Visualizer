@@ -37,12 +37,12 @@ async def _generate_and_validate(
 ) -> str:
     """Generate a shader via the LLM with progressive compile-retry.
 
-    Strategy:
+    Strategy (up to 6 LLM calls before fallback):
       1. Generate a complex shader (full creative freedom)
-      2. If it fails, ask the LLM to FIX the exact error (x2)
-      3. If fixes fail, generate a simpler 2D shader from scratch
-      4. If that also fails, return the last attempt (downstream
-         has its own fallback)
+      2. If it fails, ask the LLM to FIX the exact error (x3)
+      3. If fixes fail, generate a fresh shader from scratch
+      4. If that fails too, one more fix attempt
+      5. Fallback is absolute last resort
     """
     # ── Attempt 1: full creative generation ───────────────
     code = await llm.generate_shader(
@@ -64,9 +64,9 @@ async def _generate_and_validate(
         "Initial shader failed compile check: %s", compile_err,
     )
 
-    # ── Attempts 2-3: targeted fix of the broken shader ───
+    # ── Attempts 2-4: targeted fix of the broken shader ───
     broken_code = code
-    for retry in range(2):
+    for retry in range(3):
         fixed = await llm.fix_shader(
             previous_code=broken_code,
             compile_error=compile_err,
@@ -88,22 +88,44 @@ async def _generate_and_validate(
         broken_code = fixed
         compile_err = retry_err
 
-    # ── Attempt 4: fresh simpler shader ───────────────────
-    logger.info("Trying simpler 2D shader as last resort")
-    simple = await llm.generate_shader_simple(
+    # ── Attempt 5: fresh generation (still ambitious) ─────
+    logger.info(
+        "Fix retries exhausted, generating fresh shader",
+    )
+    fresh = await llm.generate_shader_simple(
         description=description,
         mood_tags=mood_tags,
     )
-    if simple:
-        simple_err = await asyncio.to_thread(_try_compile, simple)
-        if simple_err is None:
-            logger.info("Simple shader compiled successfully")
-            return simple
-        logger.warning("Simple shader also failed: %s", simple_err)
+    if fresh:
+        fresh_err = await asyncio.to_thread(_try_compile, fresh)
+        if fresh_err is None:
+            logger.info("Fresh shader compiled successfully")
+            return fresh
+        logger.warning(
+            "Fresh shader also failed: %s", fresh_err,
+        )
+
+        # ── Attempt 6: one final fix of the fresh shader ─
+        final_fix = await llm.fix_shader(
+            previous_code=fresh,
+            compile_error=fresh_err,
+            description=description,
+        )
+        if final_fix:
+            final_err = await asyncio.to_thread(
+                _try_compile, final_fix,
+            )
+            if final_err is None:
+                logger.info("Final fix compiled successfully")
+                return final_fix
+            logger.warning(
+                "Final fix still fails: %s", final_err,
+            )
 
     # Return whatever we have — downstream fallback catches it
     logger.warning(
-        "All shader generation attempts exhausted",
+        "All shader generation attempts exhausted "
+        "(6 LLM calls)",
     )
     return broken_code
 
