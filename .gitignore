@@ -15,6 +15,7 @@ client/dist/
 server/data/
 *.egg-info/
 .vite/
+*.tsbuildinfo
 
 # IDE
 .vscode/
