@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard, Play, Wand2, Pencil, Film } from "lucide-react";
+import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard, Play, Pencil } from "lucide-react";
 import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
@@ -21,17 +21,17 @@ const PHASE_CONFIG: Record<ChatPhase, { label: string; icon: typeof Sparkles; co
     color: "text-accent",
   },
   confirmation: {
-    label: "Ready to Render",
+    label: "Ready",
     icon: CheckCircle2,
     color: "text-success",
   },
   rendering: {
-    label: "Rendering",
+    label: "Generating Video",
     icon: Clapperboard,
     color: "text-warning",
   },
   editing: {
-    label: "Editing",
+    label: "Review & Refine",
     icon: MessageSquare,
     color: "text-accent",
   },
@@ -72,21 +72,7 @@ function ActionButtons({ onAction }: { onAction: (text: string) => void }) {
         className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover"
       >
         <Play size={14} />
-        Render
-      </button>
-      <button
-        onClick={() => onAction("Render with AI")}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-accent bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:bg-accent/20"
-      >
-        <Wand2 size={14} />
-        Render with AI
-      </button>
-      <button
-        onClick={() => onAction("Render with AI video")}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-purple-500 bg-purple-500/10 px-4 py-2 text-sm font-medium text-purple-400 transition hover:bg-purple-500/20"
-      >
-        <Film size={14} />
-        AI Video
+        Render Video
       </button>
       <button
         onClick={() => onAction("I'd like to make some changes")}
@@ -284,9 +270,9 @@ export function ChatPanel() {
             <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-accent/10">
               <Clapperboard size={22} className="animate-pulse text-accent" />
             </div>
-            <p className="text-sm font-semibold text-text-primary">Rendering your video</p>
+            <p className="text-sm font-semibold text-text-primary">Generating your video</p>
             <p className="mt-1 text-xs text-text-secondary">
-              Template: {(renderSpec as any).globalStyle?.template ?? "—"} &middot; {(renderSpec as any).sections?.length ?? 0} sections
+              {(renderSpec as any).sections?.length ?? 0} sections &middot; Beat-synced shader rendering
             </p>
             <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-bg-tertiary">
               <div
@@ -299,7 +285,7 @@ export function ChatPanel() {
             </div>
             <p className="mt-2 text-xs text-text-secondary">
               <Loader2 size={10} className="mr-1 inline animate-spin" />
-              Building video — this typically takes 30–60 seconds...
+              Rendering shader video — this may take a few minutes...
             </p>
           </div>
         )}

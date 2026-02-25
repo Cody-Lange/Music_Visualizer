@@ -35,13 +35,13 @@ export function PreviewPanel() {
         <AudioPlayer />
       </div>
 
-      {/* Template selector + Export — expands to fill remaining space when video is constrained */}
+      {/* Shader controls (preview only, hidden after render) + Export */}
       <div
         className={`border-t border-border bg-bg-secondary ${
           downloadUrl ? "flex-1 overflow-y-auto" : ""
         }`}
       >
-        <TemplateSelector />
+        {!downloadUrl && <TemplateSelector />}
         <ExportPanel />
       </div>
     </div>
