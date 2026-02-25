@@ -205,7 +205,11 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                 if render_spec:
                     # Determine AI keyframes preference
                     use_ai = render_spec.pop("useAiKeyframes", False)
-                    if re.search(r"\bwith\s+ai\b", user_content, re.IGNORECASE):
+                    use_ai_video = False
+                    if re.search(r"\bwith\s+ai\s+video\b", user_content, re.IGNORECASE):
+                        use_ai = True
+                        use_ai_video = True
+                    elif re.search(r"\bwith\s+ai\b", user_content, re.IGNORECASE):
                         use_ai = True
 
                     # Store on the job
@@ -213,14 +217,20 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                         job_store.update_job(job_id, {
                             "render_spec": render_spec,
                             "use_ai_keyframes": use_ai,
+                            "use_ai_video": use_ai_video,
                         })
 
+                    mode_label = (
+                        "AI video generation enabled."
+                        if use_ai_video
+                        else "AI keyframes enabled."
+                        if use_ai
+                        else "Procedural rendering."
+                    )
                     await websocket.send_text(json.dumps({
                         "type": "system",
                         "content": (
-                            f"Render spec ready! "
-                            f"{'AI keyframes enabled.' if use_ai else 'Procedural rendering.'} "
-                            f"Starting render..."
+                            f"Render spec ready! {mode_label} Starting render..."
                         ),
                     }))
 

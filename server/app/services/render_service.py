@@ -94,14 +94,14 @@ class RenderService:
         render_spec: RenderSpec,
         lyrics: dict | None = None,
         keyframe_paths: dict[str, str] | None = None,
+        video_clip_paths: dict[str, str] | None = None,
     ) -> dict:
         """Render a visualization video.
 
         Creates a unique video by compositing per-section visuals:
-        - Template-specific procedural backgrounds per section
-        - Section-specific multi-color gradients from the render spec
-        - Motion applied via zoompan (drift, pulse, chaotic, etc.)
-        - AI keyframe images composited when available
+        - AI video clips used directly when available (most dynamic)
+        - AI keyframe images with zoompan + effects when no video clip
+        - Procedural effects for sections without any AI media
         - Beat-synced flash overlays at beat positions
         """
         output_path = settings.render_dir / f"{render_id}.mp4"
@@ -111,25 +111,38 @@ class RenderService:
         template = render_spec.global_style.template
         beats = analysis.get("rhythm", {}).get("beats", [])
 
-        # Count additional inputs (AI keyframe images) and map section → input index
+        # Build extra FFmpeg inputs for video clips and keyframe images.
+        # Video clips take priority over static images for the same section.
         extra_inputs: list[str] = []
-        num_keyframe_inputs = 0
-        keyframe_input_map: dict[str, int] = {}  # section_label → FFmpeg input index
-        if keyframe_paths:
-            for section in render_spec.sections:
-                kf = keyframe_paths.get(section.label, "")
-                if kf and Path(kf).exists():
-                    input_idx = 1 + num_keyframe_inputs  # [0] is color source
-                    keyframe_input_map[section.label] = input_idx
-                    extra_inputs.extend(["-loop", "1", "-t", str(duration), "-i", kf])
-                    num_keyframe_inputs += 1
+        num_extra_inputs = 0
+        keyframe_input_map: dict[str, int] = {}
+        video_input_map: dict[str, int] = {}
 
-        # Input layout: [0]=color source, [1..N]=keyframes, [N+1]=audio
-        audio_input_index = 1 + num_keyframe_inputs
+        for section in render_spec.sections:
+            label = section.label
+            video = (video_clip_paths or {}).get(label, "")
+            image = (keyframe_paths or {}).get(label, "")
+
+            if video and Path(video).exists():
+                input_idx = 1 + num_extra_inputs
+                video_input_map[label] = input_idx
+                extra_inputs.extend([
+                    "-stream_loop", "-1", "-t", str(duration), "-i", video,
+                ])
+                num_extra_inputs += 1
+            elif image and Path(image).exists():
+                input_idx = 1 + num_extra_inputs
+                keyframe_input_map[label] = input_idx
+                extra_inputs.extend(["-loop", "1", "-t", str(duration), "-i", image])
+                num_extra_inputs += 1
+
+        audio_input_index = 1 + num_extra_inputs
 
         logger.info(
-            "Starting FFmpeg render: %s (template=%s, sections=%d)",
+            "Starting FFmpeg render: %s (template=%s, sections=%d, "
+            "video_clips=%d, keyframes=%d)",
             render_id, template, len(render_spec.sections),
+            len(video_input_map), len(keyframe_input_map),
         )
 
         # Graceful degradation: full → no-beats → no-transitions → simple → minimal
@@ -142,6 +155,7 @@ class RenderService:
                 render_spec, template, duration, width, height, fps,
                 beats if use_beats else [],
                 keyframe_input_map,
+                video_input_map,
                 use_xfade=use_xfade,
             )
 
@@ -202,21 +216,22 @@ class RenderService:
         fps: int,
         beats: list[float],
         keyframe_input_map: dict[str, int],
+        video_input_map: dict[str, int] | None = None,
         use_xfade: bool = True,
     ) -> str:
         """Build a comprehensive FFmpeg filter_complex.
 
-        Per-section pipeline:
-        1. Gradient background
-        2. AI keyframe overlay (if available) OR procedural effect blend
-        3. Dynamic color effects (hue cycling, vignette) for keyframe sections
-        4. Zoompan motion with per-section variation
-        5. Smooth xfade transitions between sections (or concat fallback)
-        6. Beat-synced flash overlay
+        Per-section pipeline — three possible paths:
+        A) AI video clip: scale/pad → color effects → output (most dynamic)
+        B) AI keyframe image: overlay on gradient → color effects → zoompan
+        C) Procedural: gradient → effect blend → zoompan
+
+        All paths → xfade transitions → beat flash → [vout]
         """
         filters: list[str] = []
         section_out_labels: list[str] = []
         section_durations: list[float] = []
+        video_input_map = video_input_map or {}
 
         if not render_spec.sections:
             color = self._template_base_color(template)
@@ -236,6 +251,7 @@ class RenderService:
             c2 = (colors[2] if len(colors) > 2 else colors[0]).lstrip("#")
             sec_dur = max(section.end_time - section.start_time, 0.1)
             intensity = section.intensity
+            vid_idx = video_input_map.get(section.label)
             kf_idx = keyframe_input_map.get(section.label)
 
             # Extend section duration for transition overlap
@@ -246,76 +262,95 @@ class RenderService:
                 if i < n_sections - 1:
                     actual_dur += trans_dur / 2
 
-            # ── Layer 1: section-unique gradient background ──
-            top_h = height // 2 + int(height * 0.1 * math.sin(i * 1.7))
-            bot_h = height - top_h
-            filters.append(
-                f"color=c=#{c0}:s={width}x{height}:d={actual_dur}:r={fps},"
-                f"drawbox=x=0:y=0:w={width}:h={top_h}:color=0x{c1}@0.45:t=fill,"
-                f"drawbox=x=0:y={top_h}:w={width}:h={bot_h}:color=0x{c2}@0.35:t=fill"
-                f"[{s}_bg]"
-            )
+            hue_period = max(actual_dur, 2.0)
+            hue_amp = 5 + intensity * 20
+            sat = 1 + intensity * 0.15
 
-            if kf_idx is not None:
-                # ── AI keyframe: scale to fit, overlay on gradient ──
+            if vid_idx is not None:
+                # ═══ Path A: AI video clip — most dynamic ═══
+                # Scale/pad to fit, apply color effects, output directly.
+                # No gradient background or zoompan needed — the video
+                # already has motion.
                 filters.append(
-                    f"[{kf_idx}:v]scale={width}:{height}"
+                    f"[{vid_idx}:v]fps={fps},"
+                    f"scale={width}:{height}"
                     f":force_original_aspect_ratio=decrease,"
                     f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-                    f"setsar=1,trim=duration={actual_dur},setpts=PTS-STARTPTS,"
-                    f"format=yuva420p[{s}_kf]"
-                )
-                filters.append(
-                    f"[{s}_bg]format=yuva420p[{s}_bgf];"
-                    f"[{s}_bgf][{s}_kf]overlay=0:0:format=auto[{s}_comp]"
-                )
-
-                # ── Dynamic color effects for keyframe sections ──
-                hue_period = max(actual_dur, 2.0)
-                hue_amp = 5 + intensity * 20
-                sat = 1 + intensity * 0.15
-                filters.append(
-                    f"[{s}_comp]"
+                    f"setsar=1,setpts=PTS-STARTPTS,"
+                    f"trim=duration={actual_dur},"
                     f"hue=H=sin(2*PI*t/{hue_period:.2f})*{hue_amp:.1f}"
-                    f":s={sat:.2f}+0.1*sin(2*PI*t/{hue_period:.2f}+1.5),"
-                    f"vignette=angle=PI/4"
-                    f"[{s}_fx]"
+                    f":s={sat:.2f},"
+                    f"vignette=angle=PI/4,"
+                    f"format=yuv420p"
+                    f"[{s}_out]"
                 )
-                motion_in = f"{s}_fx"
+
             else:
-                # ── No keyframe: procedural effect layer ──
-                proc = self._procedural_effect(
-                    template, s, width, height, actual_dur, fps, intensity,
+                # ═══ Paths B & C need a gradient background ═══
+                top_h = height // 2 + int(height * 0.1 * math.sin(i * 1.7))
+                bot_h = height - top_h
+                filters.append(
+                    f"color=c=#{c0}:s={width}x{height}:d={actual_dur}:r={fps},"
+                    f"drawbox=x=0:y=0:w={width}:h={top_h}:color=0x{c1}@0.45:t=fill,"
+                    f"drawbox=x=0:y={top_h}:w={width}:h={bot_h}:color=0x{c2}@0.35:t=fill"
+                    f"[{s}_bg]"
                 )
-                if proc:
-                    filters.append(proc)
-                    blend_strength = 0.25 + intensity * 0.35
+
+                if kf_idx is not None:
+                    # ═══ Path B: AI keyframe image + zoompan ═══
                     filters.append(
-                        f"[{s}_bg][{s}_fx]blend=all_mode=screen"
-                        f":all_opacity={blend_strength:.2f}[{s}_comp]"
+                        f"[{kf_idx}:v]scale={width}:{height}"
+                        f":force_original_aspect_ratio=decrease,"
+                        f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                        f"setsar=1,trim=duration={actual_dur},setpts=PTS-STARTPTS,"
+                        f"format=yuva420p[{s}_kf]"
                     )
+                    filters.append(
+                        f"[{s}_bg]format=yuva420p[{s}_bgf];"
+                        f"[{s}_bgf][{s}_kf]overlay=0:0:format=auto[{s}_comp]"
+                    )
+                    filters.append(
+                        f"[{s}_comp]"
+                        f"hue=H=sin(2*PI*t/{hue_period:.2f})*{hue_amp:.1f}"
+                        f":s={sat:.2f}+0.1*sin(2*PI*t/{hue_period:.2f}+1.5),"
+                        f"vignette=angle=PI/4"
+                        f"[{s}_fx]"
+                    )
+                    motion_in = f"{s}_fx"
                 else:
-                    filters.append(f"[{s}_bg]null[{s}_comp]")
-                motion_in = f"{s}_comp"
+                    # ═══ Path C: procedural effect layer ═══
+                    proc = self._procedural_effect(
+                        template, s, width, height, actual_dur, fps, intensity,
+                    )
+                    if proc:
+                        filters.append(proc)
+                        blend_strength = 0.25 + intensity * 0.35
+                        filters.append(
+                            f"[{s}_bg][{s}_fx]blend=all_mode=screen"
+                            f":all_opacity={blend_strength:.2f}[{s}_comp]"
+                        )
+                    else:
+                        filters.append(f"[{s}_bg]null[{s}_comp]")
+                    motion_in = f"{s}_comp"
 
-            # ── Motion (zoompan) with per-section phase variation ──
-            motion = _MOTION_PARAMS.get(
-                section.motion_style, _MOTION_PARAMS["slow-drift"]
-            )
-            phase = i * 37 % 100
-            x_expr = motion["x"].replace("on/", f"(on+{phase})/")
-            y_expr = motion["y"].replace("on/", f"(on+{phase})/")
+                # ── Zoompan (paths B & C only) ──
+                motion = _MOTION_PARAMS.get(
+                    section.motion_style, _MOTION_PARAMS["slow-drift"]
+                )
+                phase = i * 37 % 100
+                x_expr = motion["x"].replace("on/", f"(on+{phase})/")
+                y_expr = motion["y"].replace("on/", f"(on+{phase})/")
 
-            pad_w, pad_h = int(width * 1.25), int(height * 1.25)
-            total_frames = max(int(actual_dur * fps), 1)
-            filters.append(
-                f"[{motion_in}]scale={pad_w}:{pad_h},"
-                f"zoompan=z='{motion['z']}':"
-                f"x='{x_expr}':y='{y_expr}':"
-                f"d={total_frames}:s={width}x{height}:fps={fps},"
-                f"format=yuv420p"
-                f"[{s}_out]"
-            )
+                pad_w, pad_h = int(width * 1.25), int(height * 1.25)
+                total_frames = max(int(actual_dur * fps), 1)
+                filters.append(
+                    f"[{motion_in}]scale={pad_w}:{pad_h},"
+                    f"zoompan=z='{motion['z']}':"
+                    f"x='{x_expr}':y='{y_expr}':"
+                    f"d={total_frames}:s={width}x{height}:fps={fps},"
+                    f"format=yuv420p"
+                    f"[{s}_out]"
+                )
 
             section_out_labels.append(f"{s}_out")
             section_durations.append(actual_dur)

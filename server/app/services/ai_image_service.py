@@ -1,10 +1,14 @@
-"""AI image generation service for keyframe creation.
+"""AI image and video generation service for keyframe creation.
 
 Generates unique artwork for each section boundary using DALL-E 3
 (via OpenAI API) or Stability AI as a fallback. Each image is tailored
 to the section's mood, colors, and thematic content from the render spec.
+
+Optionally converts keyframe images to short video clips via
+Stability AI's image-to-video API for more dynamic visuals.
 """
 
+import asyncio
 import logging
 from pathlib import Path
 
@@ -216,6 +220,105 @@ class AIImageService:
             return str(out_path)
         except Exception:
             logger.exception("Failed to download keyframe image for '%s'", label)
+            return None
+
+    # ── Video clip generation ────────────────────────────────────────────
+
+    async def generate_video_clips(
+        self,
+        keyframe_paths: dict[str, str],
+    ) -> dict[str, str]:
+        """Convert keyframe images to video clips via Stability AI image-to-video.
+
+        Returns a dict mapping section label -> local video file path.
+        Requires STABILITY_API_KEY. Sections without a keyframe image are skipped.
+        """
+        if not settings.stability_api_key:
+            logger.warning(
+                "STABILITY_API_KEY not set — skipping video clip generation"
+            )
+            return {}
+
+        results: dict[str, str] = {}
+        tasks: dict[str, asyncio.Task[str | None]] = {}
+
+        # Submit all sections in parallel
+        for label, image_path in keyframe_paths.items():
+            if not image_path or not Path(image_path).exists():
+                continue
+            tasks[label] = asyncio.create_task(
+                self._image_to_video(image_path, label)
+            )
+
+        for label, task in tasks.items():
+            try:
+                video_path = await task
+                if video_path:
+                    results[label] = video_path
+                    logger.info("Video clip saved: %s -> %s", label, video_path)
+            except Exception:
+                logger.exception(
+                    "Video clip generation failed for section '%s'", label
+                )
+
+        return results
+
+    async def _image_to_video(
+        self, image_path: str, label: str,
+    ) -> str | None:
+        """Submit an image to Stability AI image-to-video and poll for result."""
+        client = self._client()
+        safe_label = "".join(
+            c if c.isalnum() or c in "-_" else "_" for c in label
+        )
+
+        try:
+            # Step 1: Submit image-to-video request
+            with open(image_path, "rb") as f:
+                resp = await client.post(
+                    "https://api.stability.ai/v2beta/image-to-video",
+                    headers={
+                        "Authorization": f"Bearer {settings.stability_api_key}",
+                    },
+                    files={"image": (Path(image_path).name, f, "image/png")},
+                    data={
+                        "cfg_scale": 2.5,
+                        "motion_bucket_id": 180,
+                    },
+                )
+                resp.raise_for_status()
+
+            generation_id = resp.json()["id"]
+            logger.info(
+                "Video generation started for '%s': id=%s", label, generation_id
+            )
+
+            # Step 2: Poll for completion (up to 5 minutes)
+            for attempt in range(60):
+                await asyncio.sleep(5)
+                result = await client.get(
+                    f"https://api.stability.ai/v2beta/image-to-video/result/{generation_id}",
+                    headers={
+                        "Authorization": f"Bearer {settings.stability_api_key}",
+                        "Accept": "video/*",
+                    },
+                )
+                if result.status_code == 200:
+                    out_path = settings.video_clip_dir / f"{safe_label}.mp4"
+                    out_path.write_bytes(result.content)
+                    return str(out_path)
+                if result.status_code != 202:
+                    logger.error(
+                        "Unexpected status %d polling video for '%s'",
+                        result.status_code, label,
+                    )
+                    return None
+
+            logger.error("Video generation timed out for '%s'", label)
+            return None
+
+        except Exception:
+            logger.exception("image-to-video failed for '%s'", label)
             return None
 
     async def close(self) -> None:

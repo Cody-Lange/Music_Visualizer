@@ -67,5 +67,11 @@ class Settings(BaseSettings):
         path.mkdir(parents=True, exist_ok=True)
         return path
 
+    @property
+    def video_clip_dir(self) -> Path:
+        path = Path(self.storage_path) / "video_clips"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
 
 settings = Settings()

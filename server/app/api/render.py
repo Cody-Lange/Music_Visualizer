@@ -107,18 +107,22 @@ async def start_render(req: Request) -> dict:
         "percentage": 0,
     })
 
-    # Check if AI keyframes were requested (stored separately by chat handler)
+    # Check if AI keyframes / video were requested (stored by chat handler)
     use_ai = job.get("use_ai_keyframes", False)
+    use_ai_video = job.get("use_ai_video", False)
 
     render_service = RenderService()
     keyframe_paths: dict[str, str] = {}
+    video_clip_paths: dict[str, str] = {}
 
     try:
+        ai_service: AIImageService | None = None
+
         # Step 1: Generate AI keyframes if requested
-        if use_ai and render_spec.sections:
+        if (use_ai or use_ai_video) and render_spec.sections:
             job_store.update_job(render_id, {
                 "status": "generating_keyframes",
-                "percentage": 10,
+                "percentage": 5,
             })
             logger.info("Generating AI keyframes for render %s", render_id)
 
@@ -132,13 +136,37 @@ async def start_render(req: Request) -> dict:
                 )
             except Exception:
                 logger.exception("AI keyframe generation failed, continuing with procedural")
-            finally:
-                await ai_service.close()
 
-        # Step 2: Render the video
+        # Step 2: Generate AI video clips from keyframes (if requested)
+        if use_ai_video and keyframe_paths:
+            job_store.update_job(render_id, {
+                "status": "generating_videos",
+                "percentage": 15,
+            })
+            logger.info(
+                "Generating AI video clips for render %s (%d keyframes)",
+                render_id, len(keyframe_paths),
+            )
+
+            if ai_service is None:
+                ai_service = AIImageService()
+            try:
+                video_clip_paths = await ai_service.generate_video_clips(
+                    keyframe_paths=keyframe_paths,
+                )
+            except Exception:
+                logger.exception(
+                    "AI video clip generation failed, falling back to keyframe images"
+                )
+
+        if ai_service:
+            await ai_service.close()
+
+        # Step 3: Render the video
+        render_pct = 50 if use_ai_video else (30 if use_ai else 10)
         job_store.update_job(render_id, {
             "status": "rendering",
-            "percentage": 30 if use_ai else 10,
+            "percentage": render_pct,
         })
 
         audio_path = job.get("path", "")
@@ -149,6 +177,7 @@ async def start_render(req: Request) -> dict:
             render_spec=render_spec,
             lyrics=job.get("lyrics"),
             keyframe_paths=keyframe_paths if keyframe_paths else None,
+            video_clip_paths=video_clip_paths if video_clip_paths else None,
         )
 
         job_store.update_job(render_id, {

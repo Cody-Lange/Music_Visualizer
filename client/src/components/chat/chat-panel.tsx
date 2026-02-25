@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard, Play, Wand2, Pencil } from "lucide-react";
+import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard, Play, Wand2, Pencil, Film } from "lucide-react";
 import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
@@ -80,6 +80,13 @@ function ActionButtons({ onAction }: { onAction: (text: string) => void }) {
       >
         <Wand2 size={14} />
         Render with AI
+      </button>
+      <button
+        onClick={() => onAction("Render with AI video")}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-purple-500 bg-purple-500/10 px-4 py-2 text-sm font-medium text-purple-400 transition hover:bg-purple-500/20"
+      >
+        <Film size={14} />
+        AI Video
       </button>
       <button
         onClick={() => onAction("I'd like to make some changes")}

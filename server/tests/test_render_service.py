@@ -104,6 +104,22 @@ class TestFullFilterGraph:
         assert "hue=H=sin" in filt
         assert "vignette" in filt
 
+    def test_video_clip_sections_skip_zoompan(self):
+        spec = RenderSpec(
+            sections=[
+                SectionSpec(label="intro", start_time=0, end_time=30, intensity=0.7),
+            ]
+        )
+        # Section "intro" has a video clip at input index 1
+        filt = self.service._build_full_filter_graph(
+            spec, "nebula", 30.0, 1920, 1080, 30, [], {}, {"intro": 1}
+        )
+        assert "hue=H=sin" in filt
+        assert "vignette" in filt
+        # Video clips use fps filter, not zoompan
+        assert "zoompan" not in filt
+        assert f"fps=30" in filt
+
     def test_beats_add_flash_layer(self):
         spec = RenderSpec(
             sections=[
