@@ -2,7 +2,6 @@ import { useState, useCallback, useRef } from "react";
 import { Upload, Music, Loader2 } from "lucide-react";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
-import { useChatStore } from "@/stores/chat-store";
 import { uploadAudio, getAnalysis } from "@/services/api";
 import type { AudioAnalysis } from "@/types/audio";
 
@@ -21,14 +20,13 @@ export function AudioUploadZone() {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState("");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const setFile = useAudioStore((s) => s.setFile);
+  const setView = useAudioStore((s) => s.setView);
   const setAnalysis = useAnalysisStore((s) => s.setAnalysis);
   const setIsAnalyzing = useAnalysisStore((s) => s.setIsAnalyzing);
   const setProgress = useAnalysisStore((s) => s.setProgress);
-  const addMessage = useChatStore((s) => s.addMessage);
 
   const handleFile = useCallback(
     async (file: File) => {
@@ -48,6 +46,9 @@ export function AudioUploadZone() {
       setIsAnalyzing(true);
       setProgress("uploading", 10, "Uploading audio...");
 
+      // Transition to chat view immediately so user sees progress
+      setView("chat");
+
       try {
         const { job_id } = await uploadAudio(file);
         setFile(file, job_id);
@@ -56,25 +57,16 @@ export function AudioUploadZone() {
         const { analysis } = await getAnalysis(job_id);
         setAnalysis(analysis as AudioAnalysis);
         setProgress("complete", 100, "Analysis complete");
-
-        // If user provided a prompt, add it as the first chat message
-        if (prompt.trim()) {
-          addMessage({
-            id: `msg_${Date.now()}`,
-            role: "user",
-            content: prompt.trim(),
-            timestamp: Date.now(),
-          });
-        }
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Upload failed";
         setError(msg);
         setIsAnalyzing(false);
+        setView("home");
       } finally {
         setIsUploading(false);
       }
     },
-    [prompt, setFile, setAnalysis, setIsAnalyzing, setProgress, addMessage],
+    [setFile, setView, setAnalysis, setIsAnalyzing, setProgress],
   );
 
   const onDrop = useCallback(
@@ -104,7 +96,7 @@ export function AudioUploadZone() {
           </div>
           <h1 className="text-2xl font-bold">Music Visualizer</h1>
           <p className="mt-2 text-sm text-text-secondary">
-            Upload a track and describe your vision. AI will analyze the music
+            Drop a track to get started. AI will analyze the music
             and help create a beat-synced visualization video.
           </p>
         </div>
@@ -148,20 +140,6 @@ export function AudioUploadZone() {
         {error && (
           <p className="text-center text-sm text-error">{error}</p>
         )}
-
-        {/* Optional prompt */}
-        <div>
-          <label className="mb-1.5 block text-sm text-text-secondary">
-            Optionally describe your vision:
-          </label>
-          <textarea
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            placeholder='e.g. "dark cinematic with gothic imagery and deep reds"'
-            rows={2}
-            className="w-full resize-none rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary/50 focus:border-accent focus:outline-none"
-          />
-        </div>
       </div>
     </div>
   );

@@ -5,7 +5,7 @@ import { EXPORT_PRESETS } from "@/types/render";
 
 export function Header() {
   const file = useAudioStore((s) => s.file);
-  const jobId = useAudioStore((s) => s.jobId);
+  const view = useAudioStore((s) => s.view);
   const reset = useAudioStore((s) => s.reset);
   const activePreset = useExportStore((s) => s.activePreset);
 
@@ -19,7 +19,7 @@ export function Header() {
           </span>
         </div>
 
-        {file && (
+        {file && view !== "home" && (
           <span className="ml-4 text-sm text-text-secondary">
             {file.name}
           </span>
@@ -27,19 +27,19 @@ export function Header() {
       </div>
 
       <div className="flex items-center gap-3">
-        {jobId && (
-          <>
-            <span className="rounded bg-bg-tertiary px-2 py-1 text-xs text-text-secondary">
-              {EXPORT_PRESETS[activePreset]?.label ?? "Custom"}
-            </span>
-            <button
-              onClick={reset}
-              className="flex items-center gap-1.5 rounded px-3 py-1.5 text-sm text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"
-            >
-              <Upload size={14} />
-              New
-            </button>
-          </>
+        {view === "editor" && (
+          <span className="rounded bg-bg-tertiary px-2 py-1 text-xs text-text-secondary">
+            {EXPORT_PRESETS[activePreset]?.label ?? "Custom"}
+          </span>
+        )}
+        {view !== "home" && (
+          <button
+            onClick={reset}
+            className="flex items-center gap-1.5 rounded px-3 py-1.5 text-sm text-text-secondary hover:bg-bg-tertiary hover:text-text-primary"
+          >
+            <Upload size={14} />
+            New
+          </button>
         )}
         <button className="rounded p-1.5 text-text-secondary hover:bg-bg-tertiary hover:text-text-primary">
           <Settings size={18} />

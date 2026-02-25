@@ -4,7 +4,6 @@ import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
 import { ChatMessage } from "@/components/chat/chat-message";
-import { AnalysisProgress } from "@/components/chat/analysis-progress";
 import { useChatWebSocket } from "@/hooks/use-chat-websocket";
 import type { ChatPhase } from "@/services/websocket";
 
@@ -26,7 +25,7 @@ const PHASE_CONFIG: Record<ChatPhase, { label: string; description: string; icon
   },
   rendering: {
     label: "Rendering",
-    description: "Render spec generated — ready to produce video",
+    description: "Render spec generated — preparing video",
     icon: Clapperboard,
   },
   editing: {
@@ -67,6 +66,7 @@ function getPlaceholder(phase: ChatPhase, hasAnalysis: boolean): string {
 export function ChatPanel() {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  const initialAnalysisSent = useRef(false);
 
   const messages = useChatStore((s) => s.messages);
   const isStreaming = useChatStore((s) => s.isStreaming);
@@ -75,7 +75,7 @@ export function ChatPanel() {
   const renderSpec = useChatStore((s) => s.renderSpec);
 
   const jobId = useAudioStore((s) => s.jobId);
-  const isAnalyzing = useAnalysisStore((s) => s.isAnalyzing);
+  const setView = useAudioStore((s) => s.setView);
   const analysis = useAnalysisStore((s) => s.analysis);
 
   const { sendMessage, isConnected } = useChatWebSocket();
@@ -88,14 +88,37 @@ export function ChatPanel() {
     }
   }, [messages]);
 
-  // When analysis completes and there's already a user message, trigger the LLM
+  // When analysis completes and we're connected, auto-send the initial analysis request
   useEffect(() => {
-    if (analysis && messages.length === 1 && messages[0]?.role === "user" && isConnected) {
-      sendMessage(messages[0].content);
+    if (analysis && isConnected && !initialAnalysisSent.current) {
+      initialAnalysisSent.current = true;
+
+      // Check if there's already a user message queued
+      const existingUserMsg = messages.find((m) => m.role === "user");
+      if (existingUserMsg) {
+        sendMessage(existingUserMsg.content);
+      } else {
+        // Send a default analysis request
+        const defaultPrompt = "Analyze this track and suggest a visualization concept.";
+        addMessage({
+          id: createMessageId(),
+          role: "user",
+          content: defaultPrompt,
+          timestamp: Date.now(),
+        });
+        sendMessage(defaultPrompt);
+      }
     }
-    // Only run when analysis first completes
+    // Only run when analysis first completes or connection established
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis, isConnected]);
+
+  // When phase transitions to "rendering" and we have a render spec, navigate to editor
+  useEffect(() => {
+    if (phase === "rendering" && renderSpec) {
+      setView("editor");
+    }
+  }, [phase, renderSpec, setView]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -127,11 +150,11 @@ export function ChatPanel() {
       <div className="border-b border-border px-4 py-3">
         <h2 className="text-sm font-semibold">Creative Director</h2>
         <p className="text-xs text-text-secondary">
-          {jobId
+          {analysis
             ? "Discuss visualization ideas for your track"
-            : "Upload a track to get started"}
+            : "Analyzing your track..."}
         </p>
-        {jobId && analysis && (
+        {analysis && (
           <div className="mt-1">
             <PhaseIndicator phase={phase} />
           </div>
@@ -140,8 +163,6 @@ export function ChatPanel() {
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
-        {isAnalyzing && <AnalysisProgress />}
-
         {messages.map((msg) => (
           <ChatMessage key={msg.id} message={msg} />
         ))}

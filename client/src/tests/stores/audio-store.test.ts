@@ -13,6 +13,7 @@ describe("useAudioStore", () => {
     expect(state.jobId).toBeNull();
     expect(state.audioUrl).toBeNull();
     expect(state.audioBuffer).toBeNull();
+    expect(state.view).toBe("home");
     expect(state.isPlaying).toBe(false);
     expect(state.currentTime).toBe(0);
     expect(state.duration).toBe(0);
@@ -74,11 +75,23 @@ describe("useAudioStore", () => {
     expect(useAudioStore.getState().currentTime).toBe(42.3);
   });
 
+  it("setView updates the view", () => {
+    useAudioStore.getState().setView("chat");
+    expect(useAudioStore.getState().view).toBe("chat");
+
+    useAudioStore.getState().setView("editor");
+    expect(useAudioStore.getState().view).toBe("editor");
+
+    useAudioStore.getState().setView("home");
+    expect(useAudioStore.getState().view).toBe("home");
+  });
+
   it("reset clears all state and revokes URL", () => {
     const file = new File(["audio"], "test.mp3", { type: "audio/mpeg" });
     useAudioStore.getState().setFile(file, "job-1");
     useAudioStore.getState().setIsPlaying(true);
     useAudioStore.getState().setCurrentTime(30);
+    useAudioStore.getState().setView("editor");
 
     useAudioStore.getState().reset();
 
@@ -86,6 +99,7 @@ describe("useAudioStore", () => {
     expect(state.file).toBeNull();
     expect(state.jobId).toBeNull();
     expect(state.audioUrl).toBeNull();
+    expect(state.view).toBe("home");
     expect(state.isPlaying).toBe(false);
     expect(state.currentTime).toBe(0);
     expect(URL.revokeObjectURL).toHaveBeenCalled();

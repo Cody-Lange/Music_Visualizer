@@ -102,6 +102,12 @@ When the user explicitly confirms they want to render, respond with ONLY a JSON 
 
 ### Phase: EDITING (post-render)
 Interpret edit requests and suggest specific changes. Reference sections by name and timestamp.
+CRITICAL RULES for editing:
+1. Always clarify and confirm user intent before applying any edit
+2. When the user describes a change, restate what you understand they want and ask them to confirm before proceeding
+3. Allow the user to be as detailed as they want — they may specify exact timestamps, individual sections, or broad stylistic changes
+4. Never apply edits until the user explicitly confirms each one
+5. Present proposed changes clearly (what will change, which sections/timestamps are affected) so the user can approve or modify
 """
 
 RENDER_SPEC_EXTRACTION_PROMPT = """Based on the conversation so far, extract the final agreed-upon visualization plan as a JSON render spec. Output ONLY valid JSON (no markdown fences, no explanation) conforming to this schema:
