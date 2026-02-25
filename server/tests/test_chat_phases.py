@@ -144,14 +144,32 @@ class TestPhaseTransition:
         )
         assert result == "rendering"
 
-    def test_editing_stays_editing(self) -> None:
+    def test_editing_stays_editing_on_normal_message(self) -> None:
         result = _detect_phase_transition(
             "editing",
-            "anything",
-            "response",
+            "Make the colors brighter in the chorus",
+            "I've updated the chorus colors.",
             7,
         )
         assert result == "editing"
+
+    def test_editing_to_rendering_on_render_request(self) -> None:
+        result = _detect_phase_transition(
+            "editing",
+            "Render it",
+            "",
+            8,
+        )
+        assert result == "rendering"
+
+    def test_editing_to_rendering_with_ai(self) -> None:
+        result = _detect_phase_transition(
+            "editing",
+            "Render with AI",
+            "",
+            8,
+        )
+        assert result == "rendering"
 
 
 class TestExtractRenderSpec:

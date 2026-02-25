@@ -119,6 +119,7 @@ export function ChatPanel() {
   const isAnalyzing = useAnalysisStore((s) => s.isAnalyzing);
 
   const renderError = useRenderStore((s) => s.error);
+  const downloadUrl = useRenderStore((s) => s.downloadUrl);
   const resetRender = useRenderStore((s) => s.reset);
   const setRenderStatus = useRenderStore((s) => s.setStatus);
   const setRenderProgress = useRenderStore((s) => s.setProgress);
@@ -189,6 +190,7 @@ export function ChatPanel() {
         }
         setRenderStatus("complete");
         setRenderProgress(100, "Complete!");
+        renderTriggered.current = false;
         setPhase("editing");
         setView("editor");
       })
@@ -269,12 +271,12 @@ export function ChatPanel() {
           <ChatMessage key={msg.id} message={msg} />
         ))}
 
-        {/* Action buttons in confirmation phase */}
-        {phase === "confirmation" && !isStreaming && (
+        {/* Action buttons in confirmation and editing phases */}
+        {(phase === "confirmation" || phase === "editing") && !isStreaming && (
           <ActionButtons onAction={handleActionButton} />
         )}
 
-        {renderSpec && phase === "rendering" && !renderError && (
+        {renderSpec && phase === "rendering" && !renderError && !downloadUrl && (
           <div
             ref={(el) => { el?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
             className="mx-auto max-w-md rounded-xl border border-accent/20 bg-accent/5 p-5 text-center"

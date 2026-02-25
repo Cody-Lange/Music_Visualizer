@@ -463,3 +463,122 @@ End with 1-2 follow-up questions to refine the concept."""
                 return None
 
         return None
+
+    async def generate_shader(
+        self,
+        description: str,
+        template: str = "",
+        mood_tags: list[str] | None = None,
+        retry_error: str | None = None,
+    ) -> str | None:
+        """Generate a Shadertoy-compatible GLSL fragment shader from a description.
+
+        Returns the shader code body (mainImage function) or None on failure.
+        If *retry_error* is set, the LLM is asked to fix the previous attempt.
+        """
+        client = self._get_client()
+
+        mood_str = ", ".join(mood_tags) if mood_tags else "energetic, dynamic"
+        template_hint = f"\nThe overall visual template is '{template}'." if template else ""
+
+        if retry_error:
+            user_prompt = (
+                f"The previous shader failed to compile with this error:\n{retry_error}\n\n"
+                "Please fix the shader. Output ONLY the corrected GLSL code for the mainImage function, "
+                "no explanation, no markdown fences."
+            )
+        else:
+            user_prompt = (
+                f"Create a visually stunning, music-reactive GLSL fragment shader.\n\n"
+                f"Description: {description}\n"
+                f"Mood: {mood_str}{template_hint}\n\n"
+                "Output ONLY the GLSL code (the mainImage function body and any helper functions). "
+                "No explanation, no markdown fences, no uniform declarations."
+            )
+
+        shader_system = (
+            "You are a world-renowned shader artist and Shadertoy programmer, celebrated for "
+            "creating mesmerizing real-time visual effects. You write GLSL fragment shaders that "
+            "are both technically sophisticated and aesthetically breathtaking.\n\n"
+            "RULES:\n"
+            "1. Write a function: void mainImage(out vec4 fragColor, in vec2 fragCoord)\n"
+            "2. You may write helper functions above mainImage.\n"
+            "3. The following uniforms are ALREADY declared — do NOT redeclare them:\n"
+            "   - uniform float iTime;          // elapsed time in seconds\n"
+            "   - uniform vec2 iResolution;     // viewport resolution in pixels\n"
+            "   - uniform float u_bass;         // bass energy 0-1\n"
+            "   - uniform float u_lowMid;       // low-mid energy 0-1\n"
+            "   - uniform float u_mid;          // mid energy 0-1\n"
+            "   - uniform float u_highMid;      // high-mid energy 0-1\n"
+            "   - uniform float u_treble;       // treble energy 0-1\n"
+            "   - uniform float u_energy;       // overall RMS energy 0-1\n"
+            "   - uniform float u_beat;         // beat intensity 0-1 (peaks on beat)\n"
+            "   - uniform float u_spectralCentroid; // spectral centroid 0-1\n\n"
+            "4. Use audio uniforms creatively to drive visual parameters:\n"
+            "   - u_bass for large-scale motion, pulse, displacement\n"
+            "   - u_mid for color shifts, pattern density\n"
+            "   - u_treble for fine detail, shimmer, sparkle\n"
+            "   - u_beat for flash effects, sudden transformations\n"
+            "   - u_energy for overall brightness and activity\n"
+            "   - u_spectralCentroid for color temperature shifts\n\n"
+            "5. Techniques to use (pick what fits the mood):\n"
+            "   - Signed Distance Functions (SDFs) for organic shapes\n"
+            "   - Raymarching for 3D scenes\n"
+            "   - Fractal noise (fbm), Perlin/simplex noise\n"
+            "   - Domain warping, domain repetition\n"
+            "   - Kaleidoscopic transformations\n"
+            "   - Voronoi patterns, reaction-diffusion\n"
+            "   - Color palette functions: vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d)\n"
+            "   - Smooth blending, glow effects\n"
+            "   - Polar coordinate transforms\n\n"
+            "6. CRITICAL: The shader MUST compile in WebGL2 (GLSL ES 3.00).\n"
+            "   - Do NOT use: texture(), iChannel, dFdx/dFdy\n"
+            "   - Use float literals with decimal points (1.0 not 1)\n"
+            "   - Always initialize variables\n"
+            "   - Do NOT use integer division on floats\n\n"
+            "7. Output ONLY valid GLSL code — no markdown, no backticks, no comments about uniforms.\n"
+            "   Start directly with any helper functions, then mainImage."
+        )
+
+        config = types.GenerateContentConfig(
+            system_instruction=shader_system,
+            temperature=0.9,
+            top_p=0.95,
+            max_output_tokens=4096,
+        )
+
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=user_prompt,
+                    config=config,
+                )
+                raw = response.text.strip()
+                # Strip markdown fences if the LLM wraps them anyway
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[: raw.rfind("```")]
+                return raw.strip()
+
+            except ClientError as e:
+                if e.code == 429 and attempt < max_retries:
+                    delay = 15.0
+                    match = _re.search(r"retry in ([\d.]+)s", str(e), _re.IGNORECASE)
+                    if match:
+                        delay = float(match.group(1)) + 1.0
+                    logger.warning(
+                        "Rate limited on shader gen (attempt %d/%d), retrying in %.1fs",
+                        attempt + 1, max_retries, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.exception("Gemini API error generating shader")
+                return None
+            except Exception:
+                logger.exception("Error generating shader")
+                return None
+
+        return None

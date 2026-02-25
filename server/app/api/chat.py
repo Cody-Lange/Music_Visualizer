@@ -114,7 +114,14 @@ def _detect_phase_transition(
         # User wants more changes — back to refinement
         return "refinement"
 
-    # rendering and editing phases stay as-is until explicitly changed
+    if phase == "editing":
+        # User wants to re-render from editor
+        if _CONFIRM_PATTERNS.search(user_content):
+            return "rendering"
+        # Otherwise stay in editing for further refinement
+        return "editing"
+
+    # rendering phase stays as-is until explicitly changed
     return phase
 
 
@@ -180,7 +187,7 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
             # Early detection: if user is confirming render, skip streaming
             # the JSON and go straight to render spec extraction
             will_render = (
-                phase == "confirmation"
+                phase in ("confirmation", "editing")
                 and _CONFIRM_PATTERNS.search(user_content)
             )
 
