@@ -327,11 +327,125 @@ The wrapper compiles your code as #version 330, which is STRICT about types.
     Every opening brace {{ must have a matching closing brace }}. Count them carefully.
 17. Helper functions that return a value MUST have a return statement on every code path
 
+## COMPLETE WORKING EXAMPLE
+
+This example shows the exact format your output should follow — helper functions first, then \
+mainImage. Study the bracket matching, float literals, and function signatures carefully:
+
+```
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+float sdSphere(vec3 p, float r) {
+    return length(p) - r;
+}
+
+float scene(vec3 p) {
+    float sphere = sdSphere(p, 1.0 + u_bass * 0.3);
+    float ground = p.y + 1.0;
+    return min(sphere, ground);
+}
+
+vec3 getNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(
+        scene(p + e.xyy) - scene(p - e.xyy),
+        scene(p + e.yxy) - scene(p - e.yxy),
+        scene(p + e.yyx) - scene(p - e.yyx)
+    ));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+
+    vec3 ro = vec3(0.0, 0.0, -3.0 + u_energy * 0.5);
+    vec3 rd = normalize(vec3(uv, 1.5));
+
+    float t = 0.0;
+    for (int i = 0; i < 64; i++) {
+        vec3 p = ro + rd * t;
+        float d = scene(p);
+        if (d < 0.001) break;
+        t += d;
+        if (t > 20.0) break;
+    }
+
+    vec3 col = vec3(0.0);
+    if (t < 20.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = getNormal(p);
+        vec3 light = normalize(vec3(1.0, 1.0, -1.0));
+        float diff = max(dot(n, light), 0.0);
+        col = palette(
+            t * 0.1 + iTime * 0.1 + u_spectralCentroid,
+            vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4), vec3(0.0, 0.15, 0.2)
+        ) * diff;
+        col += vec3(0.15) * smoothstep(0.0, 1.0, u_beat);
+    }
+
+    col += vec3(0.02) * u_treble;
+    float vig = 1.0 - smoothstep(0.4, 1.4, length(uv));
+    col *= vig;
+    fragColor = vec4(col, 1.0);
+}
+```
+
 ## OUTPUT FORMAT
 
 Output ONLY valid GLSL code. No markdown fences, no backticks, no explanation, no comments \
 about uniforms. Start directly with helper functions (if any), then mainImage.\
 """
+
+
+# Regex patterns for sanitising LLM-generated shader code
+_RE_MARKDOWN_FENCE = _re.compile(r"^```(?:glsl|hlsl|c|cpp)?\s*\n?", _re.MULTILINE)
+_RE_MARKDOWN_CLOSE = _re.compile(r"\n?```\s*$")
+_RE_VERSION = _re.compile(r"^\s*#\s*version\s+.*$", _re.MULTILINE)
+_RE_PRECISION = _re.compile(r"^\s*precision\s+\w+\s+float\s*;.*$", _re.MULTILINE)
+_RE_UNIFORM = _re.compile(
+    r"^\s*uniform\s+\w+\s+(?:iTime|iResolution|u_bass|u_lowMid|u_mid|u_highMid|u_treble|u_energy|u_beat|u_spectralCentroid)\s*;.*$",
+    _re.MULTILINE,
+)
+_RE_OUT_FRAGCOLOR = _re.compile(r"^\s*out\s+vec4\s+fragColor\s*;.*$", _re.MULTILINE)
+_RE_VOID_MAIN = _re.compile(
+    r"void\s+main\s*\(\s*\)\s*\{[^}]*mainImage\s*\([^)]*\)\s*;[^}]*\}",
+    _re.DOTALL,
+)
+
+
+def sanitize_shader_code(raw: str) -> str:
+    """Clean up common LLM mistakes in generated GLSL code.
+
+    Strips markdown fences, duplicate uniform/out declarations, #version
+    directives, precision qualifiers, and wrapper ``void main()`` functions
+    that the shader wrapper already provides.
+    """
+    code = raw.strip()
+
+    # Strip markdown fences
+    code = _RE_MARKDOWN_FENCE.sub("", code)
+    code = _RE_MARKDOWN_CLOSE.sub("", code)
+
+    # Strip #version directive (wrapper adds it)
+    code = _RE_VERSION.sub("", code)
+
+    # Strip precision qualifier (wrapper adds it)
+    code = _RE_PRECISION.sub("", code)
+
+    # Strip redeclared uniforms
+    code = _RE_UNIFORM.sub("", code)
+
+    # Strip duplicate `out vec4 fragColor;`
+    code = _RE_OUT_FRAGCOLOR.sub("", code)
+
+    # Strip void main() wrapper that calls mainImage (wrapper provides this)
+    code = _RE_VOID_MAIN.sub("", code)
+
+    # Collapse excessive blank lines
+    code = _re.sub(r"\n{3,}", "\n\n", code)
+
+    return code.strip()
 
 
 class LLMService:
@@ -611,18 +725,42 @@ End with 1-2 follow-up questions to refine the concept."""
 
         if retry_error and previous_code:
             user_prompt = (
+                "IMPORTANT CONTEXT: Your code is inserted into this wrapper:\n"
+                "```\n"
+                "#version 330\n"
+                "precision highp float;\n"
+                "uniform float iTime; uniform vec2 iResolution;\n"
+                "uniform float u_bass; uniform float u_lowMid; uniform float u_mid;\n"
+                "uniform float u_highMid; uniform float u_treble; uniform float u_energy;\n"
+                "uniform float u_beat; uniform float u_spectralCentroid;\n"
+                "out vec4 fragColor;\n\n"
+                "// YOUR CODE IS INSERTED HERE\n\n"
+                "void main() { mainImage(fragColor, gl_FragCoord.xy); }\n"
+                "```\n\n"
                 f"The following shader failed to compile:\n\n```glsl\n{previous_code}\n```\n\n"
                 f"Compiler error:\n{retry_error}\n\n"
-                "Fix the error. Double-check every function's parentheses and braces are matched, "
-                "every return type matches the function signature, and all float literals use a decimal point. "
-                "Output ONLY the corrected GLSL code (helper functions + mainImage). "
-                "No explanation, no markdown fences, no uniform declarations."
+                "The error is likely caused by mismatched parentheses "
+                "or braces in a helper function, redeclared uniforms/"
+                "out variables, a #version directive, or a void main()"
+                " wrapper. Fix the error by carefully counting ALL "
+                "parentheses () and braces {{}}. "
+                "Every return type must match the function signature. "
+                "All float literals need a decimal point. "
+                "Do NOT include #version, precision, uniform "
+                "declarations, out vec4 fragColor;, or void main(). "
+                "Output ONLY the corrected GLSL code "
+                "(helper functions + mainImage). "
+                "No explanation, no markdown fences."
             )
         elif retry_error:
             user_prompt = (
                 f"A shader failed to compile with this error:\n{retry_error}\n\n"
-                "Generate a new, correct shader. Output ONLY valid GLSL code (helper functions + mainImage). "
-                "No explanation, no markdown fences, no uniform declarations."
+                "Generate a new, simpler, correct shader. "
+                "Focus on getting it to compile cleanly. "
+                "Do NOT include #version, precision, uniform "
+                "declarations, out vec4 fragColor;, or void main(). "
+                "Output ONLY valid GLSL code (helper functions + mainImage). "
+                "No explanation, no markdown fences."
             )
         else:
             user_prompt = (
@@ -656,12 +794,8 @@ End with 1-2 follow-up questions to refine the concept."""
                     config=config,
                 )
                 raw = response.text.strip()
-                # Strip markdown fences if the LLM wraps them anyway
-                if raw.startswith("```"):
-                    raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-                if raw.endswith("```"):
-                    raw = raw[: raw.rfind("```")]
-                return raw.strip()
+                # Sanitize the LLM output (strips fences, redeclared uniforms, etc.)
+                return sanitize_shader_code(raw)
 
             except ClientError as e:
                 if e.code == 429 and attempt < max_retries:

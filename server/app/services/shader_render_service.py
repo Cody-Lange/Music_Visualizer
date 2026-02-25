@@ -167,7 +167,7 @@ class ShaderRenderService:
         """Render a complete video from a GLSL shader + audio analysis.
 
         Validates the shader first. If compilation fails, asks the LLM to fix
-        it (up to 2 retries). Falls back to a built-in shader on total failure.
+        it (up to 3 retries). Falls back to a built-in shader on total failure.
         The heavy GL + FFmpeg work runs in a thread to avoid blocking the event loop.
         """
         # Validate shader and retry via LLM if compilation fails
@@ -177,7 +177,7 @@ class ShaderRenderService:
             from app.services.llm_service import LLMService
             llm = LLMService()
             broken_code = shader_code  # keep original for LLM context
-            for retry in range(2):
+            for retry in range(3):
                 fixed = await llm.generate_shader(
                     description="Fix the shader compilation error",
                     retry_error=compile_err,
