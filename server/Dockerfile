@@ -5,6 +5,9 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
+    libegl1-mesa \
+    libgl1-mesa-dri \
+    libosmesa6 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .

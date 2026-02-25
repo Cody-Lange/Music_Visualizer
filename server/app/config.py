@@ -2,9 +2,17 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Resolve .env from the project root (one level above server/)
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_ENV_FILE = _PROJECT_ROOT / ".env"
+
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=str(_ENV_FILE),
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
 
     # Required API keys
     google_ai_api_key: str = ""
@@ -31,6 +39,7 @@ class Settings(BaseSettings):
     # App settings
     cors_origins: str = "http://localhost:5173"
     max_upload_size_mb: int = 50
+    gemini_model: str = "gemini-2.5-flash-lite"
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -55,6 +64,12 @@ class Settings(BaseSettings):
     @property
     def keyframe_dir(self) -> Path:
         path = Path(self.storage_path) / "keyframes"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    @property
+    def video_clip_dir(self) -> Path:
+        path = Path(self.storage_path) / "video_clips"
         path.mkdir(parents=True, exist_ok=True)
         return path
 

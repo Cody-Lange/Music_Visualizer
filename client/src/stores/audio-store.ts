@@ -1,11 +1,16 @@
 import { create } from "zustand";
 
+export type AppView = "home" | "chat" | "editor";
+
 interface AudioState {
   // File
   file: File | null;
   jobId: string | null;
   audioUrl: string | null;
   audioBuffer: AudioBuffer | null;
+
+  // Navigation
+  view: AppView;
 
   // Playback
   isPlaying: boolean;
@@ -16,6 +21,7 @@ interface AudioState {
   // Actions
   setFile: (file: File, jobId: string) => void;
   setAudioBuffer: (buffer: AudioBuffer) => void;
+  setView: (view: AppView) => void;
   setIsPlaying: (playing: boolean) => void;
   setCurrentTime: (time: number) => void;
   setVolume: (volume: number) => void;
@@ -27,6 +33,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   jobId: null,
   audioUrl: null,
   audioBuffer: null,
+  view: "home",
   isPlaying: false,
   currentTime: 0,
   duration: 0,
@@ -44,6 +51,8 @@ export const useAudioStore = create<AudioState>((set, get) => ({
   setAudioBuffer: (buffer) =>
     set({ audioBuffer: buffer, duration: buffer.duration }),
 
+  setView: (view) => set({ view }),
+
   setIsPlaying: (isPlaying) => set({ isPlaying }),
   setCurrentTime: (currentTime) => set({ currentTime }),
   setVolume: (volume) => set({ volume: Math.max(0, Math.min(1, volume)) }),
@@ -56,6 +65,7 @@ export const useAudioStore = create<AudioState>((set, get) => ({
       jobId: null,
       audioUrl: null,
       audioBuffer: null,
+      view: "home",
       isPlaying: false,
       currentTime: 0,
       duration: 0,

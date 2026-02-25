@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.config import settings
-from app.api import audio, lyrics, chat, render
+from app.api import audio, lyrics, chat, render, shader
 
 
 @asynccontextmanager
@@ -37,6 +37,7 @@ app.include_router(audio.router, prefix="/api/audio", tags=["audio"])
 app.include_router(lyrics.router, prefix="/api/lyrics", tags=["lyrics"])
 app.include_router(chat.router, prefix="/ws", tags=["chat"])
 app.include_router(render.router, prefix="/api/render", tags=["render"])
+app.include_router(shader.router, prefix="/api/shader", tags=["shader"])
 
 # Serve rendered files
 storage_path = Path(settings.storage_path)

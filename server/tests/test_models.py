@@ -188,7 +188,8 @@ class TestRenderModels:
 
     def test_global_style_defaults(self):
         g = GlobalStyle()
-        assert g.template == "nebula"
+        assert g.template == "shader"
+        assert g.shader_description == ""
         assert g.style_modifiers == []
         assert g.lyrics_display.enabled is True
         assert g.lyrics_display.font == "sans"
@@ -211,7 +212,7 @@ class TestRenderModels:
 
     def test_render_spec_defaults(self):
         r = RenderSpec()
-        assert r.global_style.template == "nebula"
+        assert r.global_style.template == "shader"
         assert r.sections == []
         assert r.export_settings.resolution == (1920, 1080)
 

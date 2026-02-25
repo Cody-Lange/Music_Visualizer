@@ -1,25 +1,39 @@
 import { create } from "zustand";
-import type { VisualTemplate } from "@/types/render";
 
 interface VisualizerState {
-  activeTemplate: VisualTemplate;
+  customShaderCode: string | null;
+  shaderDescription: string | null;
+  shaderError: string | null;
+  isGeneratingShader: boolean;
   isPreviewPlaying: boolean;
 
-  setActiveTemplate: (template: VisualTemplate) => void;
+  setCustomShaderCode: (code: string | null) => void;
+  setShaderDescription: (desc: string | null) => void;
+  setShaderError: (error: string | null) => void;
+  setIsGeneratingShader: (generating: boolean) => void;
   setIsPreviewPlaying: (playing: boolean) => void;
   reset: () => void;
 }
 
 export const useVisualizerStore = create<VisualizerState>((set) => ({
-  activeTemplate: "nebula",
+  customShaderCode: null,
+  shaderDescription: null,
+  shaderError: null,
+  isGeneratingShader: false,
   isPreviewPlaying: false,
 
-  setActiveTemplate: (activeTemplate) => set({ activeTemplate }),
+  setCustomShaderCode: (customShaderCode) => set({ customShaderCode, shaderError: null }),
+  setShaderDescription: (shaderDescription) => set({ shaderDescription }),
+  setShaderError: (shaderError) => set({ shaderError }),
+  setIsGeneratingShader: (isGeneratingShader) => set({ isGeneratingShader }),
   setIsPreviewPlaying: (isPreviewPlaying) => set({ isPreviewPlaying }),
 
   reset: () =>
     set({
-      activeTemplate: "nebula",
+      customShaderCode: null,
+      shaderDescription: null,
+      shaderError: null,
+      isGeneratingShader: false,
       isPreviewPlaying: false,
     }),
 }));

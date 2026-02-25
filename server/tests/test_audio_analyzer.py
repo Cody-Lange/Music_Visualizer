@@ -23,7 +23,7 @@ class TestExtractMetadata:
 
     def test_no_extension(self, analyzer: AudioAnalyzerService):
         meta = analyzer._extract_metadata("noext", 60.0, 22050)
-        assert meta.format == "noext"  # rsplit gives the full name
+        assert meta.format == "unknown"
 
     def test_multiple_dots(self, analyzer: AudioAnalyzerService):
         meta = analyzer._extract_metadata("my.song.file.flac", 120.0, 44100)

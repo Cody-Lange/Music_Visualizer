@@ -1,17 +1,22 @@
 import { create } from "zustand";
 import type { ChatMessage } from "@/types/chat";
 import type { RenderSpec } from "@/types/render";
+import type { ChatPhase } from "@/services/websocket";
 
 interface ChatState {
   messages: ChatMessage[];
   isStreaming: boolean;
   renderSpec: RenderSpec | null;
   sessionId: string;
+  phase: ChatPhase;
+  initialAnalysisSent: boolean;
 
   addMessage: (message: ChatMessage) => void;
   updateLastAssistantMessage: (content: string) => void;
   setIsStreaming: (streaming: boolean) => void;
   setRenderSpec: (spec: RenderSpec) => void;
+  setPhase: (phase: ChatPhase) => void;
+  setInitialAnalysisSent: (sent: boolean) => void;
   reset: () => void;
 }
 
@@ -26,6 +31,8 @@ export const useChatStore = create<ChatState>((set) => ({
   isStreaming: false,
   renderSpec: null,
   sessionId: `session_${Date.now()}`,
+  phase: "analysis",
+  initialAnalysisSent: false,
 
   addMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
@@ -56,11 +63,17 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setRenderSpec: (renderSpec) => set({ renderSpec }),
 
+  setPhase: (phase) => set({ phase }),
+
+  setInitialAnalysisSent: (initialAnalysisSent) => set({ initialAnalysisSent }),
+
   reset: () =>
     set({
       messages: [],
       isStreaming: false,
       renderSpec: null,
       sessionId: `session_${Date.now()}`,
+      phase: "analysis",
+      initialAnalysisSent: false,
     }),
 }));

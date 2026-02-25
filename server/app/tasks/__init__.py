@@ -5,6 +5,8 @@ When ready, replace synchronous service calls in the API routes
 with .delay() calls to these tasks.
 """
 
+import platform
+
 from celery import Celery
 
 from app.config import settings
@@ -25,3 +27,11 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
 )
+
+# On Windows, billiard's prefork pool has known issues with shutdown
+# (PermissionError / [WinError 5]). Use the solo pool instead.
+if platform.system() == "Windows":
+    celery_app.conf.update(
+        worker_pool="solo",
+        worker_concurrency=1,
+    )

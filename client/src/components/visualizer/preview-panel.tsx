@@ -9,13 +9,21 @@ export function PreviewPanel() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Visualizer */}
-      <div className="relative flex-1 bg-black">
+      {/* Visualizer / Rendered video */}
+      <div
+        className={`relative bg-black ${
+          downloadUrl
+            ? "flex-shrink-0 flex items-center justify-center"
+            : "flex-1"
+        }`}
+        style={downloadUrl ? { height: "clamp(200px, 40vh, 420px)" } : undefined}
+      >
         {downloadUrl ? (
           <video
             src={downloadUrl}
             controls
-            className="h-full w-full object-contain"
+            autoPlay
+            className="max-h-full max-w-full rounded object-contain"
           />
         ) : (
           <VisualizerCanvas />
@@ -27,9 +35,13 @@ export function PreviewPanel() {
         <AudioPlayer />
       </div>
 
-      {/* Template selector + Export */}
-      <div className="border-t border-border bg-bg-secondary">
-        <TemplateSelector />
+      {/* Shader controls (preview only, hidden after render) + Export */}
+      <div
+        className={`border-t border-border bg-bg-secondary ${
+          downloadUrl ? "flex-1 overflow-y-auto" : ""
+        }`}
+      >
+        {!downloadUrl && <TemplateSelector />}
         <ExportPanel />
       </div>
     </div>

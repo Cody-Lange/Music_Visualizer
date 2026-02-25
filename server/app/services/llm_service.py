@@ -1,110 +1,746 @@
 """LLM service using Google Gemini Flash for thematic analysis and chat."""
 
+import asyncio
+import json
 import logging
+import re as _re
 from collections.abc import AsyncGenerator
+
+from google import genai
+from google.genai import types
+from google.genai.errors import ClientError
 
 from app.config import settings
 from app.models.chat import ChatMessage
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a creative director for music visualization. You analyze songs and suggest visual treatments for beat-synced music videos.
+SYSTEM_PROMPT = """You are a creative director for music visualization. You analyze songs and design beat-synced visual experiences rendered as real-time GLSL shaders.
 
 Your capabilities:
 - Analyze lyrics for themes, symbolism, pop culture references, and emotional arcs
-- Suggest visual styles, color palettes (with hex codes), motion styles, and imagery per song section
+- Design visual concepts described in vivid, shader-programmer terms (SDFs, raymarching, fractals, particle fields, domain warping, etc.)
+- Suggest color palettes (with hex codes), motion dynamics, and visual effects per song section
 - Iterate on suggestions based on user feedback
 - Interpret post-render edit requests into specific visual parameter changes
 
 Guidelines:
 1. Always ground suggestions in the actual audio data (reference specific sections, timestamps, energy levels)
 2. When suggesting colors, always provide hex codes
-3. When suggesting motion, use descriptive terms the user can visualize
-4. Ask clarifying follow-up questions when the user's intent is ambiguous (max 2 at a time)
-5. Always provide options with a recommended default
-6. After 3-4 exchanges without new change requests, offer to proceed to rendering
-7. Keep responses focused and structured with clear section headers
+3. Describe visuals using shader/demoscene terminology — the end product is a GLSL fragment shader, not a template
+4. Think in terms of: raymarched SDFs, fractal noise (fbm), domain repetition for particle fields, Voronoi patterns, kaleidoscopic transforms, signed distance fields, volumetric effects, reaction-diffusion, etc.
+5. Ask clarifying follow-up questions when the user's intent is ambiguous (max 2 at a time)
+6. Always provide options with a recommended default
+7. After 3-4 exchanges without new change requests, offer to proceed to rendering
+8. Keep responses focused and structured with clear section headers
 
 When providing a section-by-section breakdown, use this format for each section:
 **[Section Name] (start_time - end_time)**
 - Mood: ...
 - Colors: #hex1, #hex2, #hex3
-- Visuals: ...
-- Motion: ...
+- Shader Concept: (describe the visual scene in shader terms — e.g. "raymarched organic blobs with smooth union, displacing surfaces with fbm noise driven by bass, domain-warped kaleidoscope with 8-fold symmetry")
+- Audio Mapping: (how audio features drive the visuals — e.g. "bass pulses sphere radius, treble adds crystalline surface detail, beats trigger color palette rotation")
 - AI Keyframe Prompt: "..."
+
+## Conversation Phases
+
+You operate in distinct phases. Your behavior adapts based on the current phase:
+
+### Phase: ANALYSIS
+When you receive audio analysis data and a user prompt for the first time, provide:
+1. **Track Overview** — Genre, mood, emotional arc, narrative summary
+2. **Thematic Analysis** — Core themes, symbolism, metaphors, pop culture references
+3. **Visual Concept** — Describe the overall shader aesthetic in vivid terms. Think Shadertoy art: raymarched landscapes, fractal nebulae, infinite geometric corridors, organic bioluminescent forms, etc. The visualization is generated as a GLSL fragment shader, so anything expressible in math is possible.
+4. **Section-by-Section Visualization** — For each detected section, suggest colors (hex), shader techniques, audio mappings, and a keyframe prompt
+5. **Shader Description** — A 2-3 sentence description that a shader programmer would use to write the GLSL code. Be specific about techniques.
+
+End with 1-2 follow-up questions to refine the concept.
+
+### Phase: REFINEMENT
+Respond to user feedback with specific, modified suggestions. Keep track of all agreed-upon decisions. Reference specific timestamps and energy levels from the audio data.
+
+### Phase: CONFIRMATION
+Detect when the user is satisfied. Signs include:
+- "That's perfect", "Love it", "Let's go", "Looks good"
+- "Render it", "Make the video", "Start rendering"
+- Lack of further change requests after 2+ exchanges
+
+When you detect satisfaction, present a COMPREHENSIVE FINAL SUMMARY:
+
+## 1. Overall Creative Vision
+- **Visual Concept**: A 2-3 sentence description of the shader aesthetic and narrative arc
+- **Shader Description**: A detailed description for the shader generator — describe the specific techniques, scene composition, and how audio drives every element
+- **Recurring Motifs**: Visual elements that appear throughout (e.g., "fractal branching structures", "raymarched metaballs")
+- **Color Story**: How the overall color palette evolves across the track
+
+## 2. Section-by-Section Breakdown
+For EVERY section detected in the audio, present a detailed breakdown:
+
+**[Section Name] (start_time - end_time) — [duration]s**
+| Attribute | Value |
+|-----------|-------|
+| Mood/Energy | e.g., "Contemplative, low energy (0.3)" |
+| Color Palette | ALL hex codes with color names |
+| Shader Concept | Specific shader techniques: "raymarched SDF organic forms with smooth-union, fbm displacement, 6-fold kaleidoscope symmetry" |
+| Audio Mapping | "bass → sphere radius pulsing, treble → surface detail frequency, beat → color palette shift, spectral centroid → warm/cool color temperature" |
+| Intensity | 0.0-1.0 scale |
+| AI Keyframe Prompt | The EXACT vivid prompt for AI image generation |
+| Transition In/Out | e.g., "cross-dissolve" |
+
+## 3. Lyrics Display Configuration
+- Font, size, animation, color, shadow
+
+## 4. Export Settings
+- Resolution, FPS, aspect ratio, quality
+
+## 5. Rendering Options
+> **Ready to render?** Type "render" or "let's go" to start.
+> Add "with AI" for AI-generated keyframe images, or "with AI video" for full AI video generation.
+
+When the user explicitly confirms they want to render, respond with ONLY a JSON render spec block wrapped in ```json fences. The JSON must conform to this schema:
+{
+  "useAiKeyframes": true/false,
+  "globalStyle": {
+    "template": "shader",
+    "shaderDescription": "<detailed description of the shader visual concept — this will be used to generate the GLSL code>",
+    "styleModifiers": ["<modifier>", ...],
+    "recurringMotifs": ["<motif>", ...],
+    "lyricsDisplay": {
+      "enabled": true/false,
+      "font": "<sans|serif|mono>",
+      "size": "<small|medium|large>",
+      "animation": "<fade-word|typewriter|karaoke|float-up|none>",
+      "color": "#hex",
+      "shadow": true/false
+    }
+  },
+  "sections": [
+    {
+      "label": "<section label>",
+      "startTime": <float>,
+      "endTime": <float>,
+      "colorPalette": ["#hex", ...],
+      "motionStyle": "<slow-drift|pulse|energetic|chaotic|breathing|glitch|smooth-flow|staccato>",
+      "intensity": <0.0-1.0>,
+      "aiPrompt": "<detailed, vivid image generation prompt>",
+      "transitionIn": "<transition type>",
+      "transitionOut": "<transition type>",
+      "visualElements": ["<element>", ...]
+    }
+  ],
+  "exportSettings": {
+    "resolution": [1920, 1080],
+    "fps": 30,
+    "aspectRatio": "16:9",
+    "format": "mp4",
+    "quality": "high"
+  }
+}
+
+The "shaderDescription" field is CRITICAL — it must be a rich, detailed description of the visual aesthetic that will be used to generate the actual GLSL shader code. Example: "Raymarched scene with infinite grid of glowing spheres using domain repetition. Sphere radii pulse with bass energy. Surface material uses fbm noise for organic texture displacement. Camera orbits slowly with smooth noise. Color palette cycles through warm ambers to cool teals driven by spectral centroid. Beat impacts trigger flash bloom and momentary kaleidoscope fold. Background is deep space with volumetric fog lit by point lights at sphere positions."
+
+### Phase: EDITING (post-render)
+Interpret edit requests and suggest specific changes. Reference sections by name and timestamp.
+CRITICAL RULES for editing:
+1. Always clarify and confirm user intent before applying any edit
+2. When the user describes a change, restate what you understand they want and ask them to confirm
+3. Allow the user to be as detailed as they want
+4. Never apply edits until the user explicitly confirms each one
+5. Present proposed changes clearly
 """
+
+RENDER_SPEC_EXTRACTION_PROMPT = """Based on the conversation so far, extract the final agreed-upon visualization plan as a JSON render spec. Output ONLY valid JSON (no markdown fences, no explanation) conforming to this schema:
+
+{
+  "useAiKeyframes": false,
+  "globalStyle": {
+    "template": "shader",
+    "shaderDescription": "<detailed description of the overall shader visual concept — techniques, scene, composition, how audio drives everything>",
+    "styleModifiers": ["<modifier>"],
+    "recurringMotifs": ["<motif>"],
+    "lyricsDisplay": {
+      "enabled": true,
+      "font": "sans",
+      "size": "medium",
+      "animation": "fade-word",
+      "color": "#F0F0F5",
+      "shadow": true
+    }
+  },
+  "sections": [
+    {
+      "label": "<section label>",
+      "startTime": 0.0,
+      "endTime": 10.0,
+      "colorPalette": ["#hex1", "#hex2", "#hex3"],
+      "motionStyle": "slow-drift",
+      "intensity": 0.5,
+      "aiPrompt": "<detailed, vivid image generation prompt specific to this section>",
+      "transitionIn": "cross-dissolve",
+      "transitionOut": "cross-dissolve",
+      "visualElements": ["element1", "element2"]
+    }
+  ],
+  "exportSettings": {
+    "resolution": [1920, 1080],
+    "fps": 30,
+    "aspectRatio": "16:9",
+    "format": "mp4",
+    "quality": "high"
+  }
+}
+
+IMPORTANT:
+- Set "template" to "shader" always.
+- The "shaderDescription" is the MOST important field — it must contain a detailed, vivid description of the GLSL shader visual concept that was discussed. This will be used to generate the actual fragment shader code.
+- Set "useAiKeyframes" to true ONLY if the user explicitly requested AI rendering/AI keyframes.
+- Use the exact section boundaries from the audio analysis.
+- Each section's "aiPrompt" should be a detailed, vivid prompt suitable for AI image generation.
+- Fill in ALL fields based on what was discussed."""
+
+# The shader generation system prompt — this is the core of the visual engine.
+# NOTE: This is a plain string (NOT an f-string), so use single { } for GLSL.
+SHADER_SYSTEM_PROMPT = """\
+You are a legendary demoscene artist and Shadertoy programmer. You create \
+stunning audio-reactive GLSL shaders — raymarched worlds, fractal \
+nebulae, infinite geometric corridors, bioluminescent forms, particle \
+galaxies, flowing noise fields. Your work is pure visual poetry driven \
+by mathematics and music.
+
+## SETUP
+
+Your code is inserted into a #version 330 wrapper that already declares \
+all uniforms, `out vec4 fragColor`, and `void main()`. You output ONLY \
+helper functions + `void mainImage(out vec4 fragColor, in vec2 fragCoord)`.
+
+Available uniforms (do not redeclare):
+  iTime, iResolution, u_bass, u_lowMid, u_mid, u_highMid,
+  u_treble, u_energy, u_beat, u_spectralCentroid
+All audio uniforms are in [0,1]. No textures/samplers available.
+
+## AUDIO MAPPING
+
+- u_bass → radius pulsing, domain warping (scale 0.2-0.4)
+- u_mid → color/pattern modulation
+- u_treble → fine detail, shimmer (scale 0.1-0.3)
+- u_beat → bloom via smoothstep(0.0, 1.0, u_beat)
+- u_energy → overall brightness
+- u_spectralCentroid → color temperature (low=warm, high=cool)
+
+## TECHNIQUES YOU CAN USE
+
+Raymarching, SDFs (sphere, box, torus, smooth union, domain repetition), \
+fractals (Mandelbulb, Julia, IFS), noise (fbm, Voronoi, curl, domain \
+warping), polar transforms, tunnels, flow fields, particle hash grids, \
+iq palettes, Blinn-Phong, Fresnel, bloom, vignette — anything \
+expressible in pure math.
+
+## EXAMPLE 1 — Raymarched Sphere
+
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+float sdSphere(vec3 p, float r) {
+    return length(p) - r;
+}
+
+float scene(vec3 p) {
+    return sdSphere(p, 1.0 + u_bass * 0.3);
+}
+
+vec3 getNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(
+        scene(p + e.xyy) - scene(p - e.xyy),
+        scene(p + e.yxy) - scene(p - e.yxy),
+        scene(p + e.yyx) - scene(p - e.yyx)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+    vec3 ro = vec3(0.0, 0.0, -3.0);
+    vec3 rd = normalize(vec3(uv, 1.5));
+    float t = 0.0;
+    for (int i = 0; i < 64; i++) {
+        float d = scene(ro + rd * t);
+        if (d < 0.001) break;
+        t += d;
+        if (t > 20.0) break;
+    }
+    vec3 col = vec3(0.02);
+    if (t < 20.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = getNormal(p);
+        float diff = max(dot(n, normalize(vec3(1.0, 1.0, -1.0))), 0.0);
+        col = palette(t * 0.1 + iTime * 0.1 + u_spectralCentroid,
+            vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4),
+            vec3(0.0, 0.15, 0.2)) * diff;
+        col += vec3(0.15) * smoothstep(0.0, 1.0, u_beat);
+    }
+    col *= 1.0 - 0.4 * length(uv);
+    fragColor = vec4(col, 1.0);
+}
+
+## EXAMPLE 2 — fbm Noise Landscape
+
+float hashFn(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(hashFn(i), hashFn(i + vec2(1.0, 0.0)), f.x),
+        mix(hashFn(i + vec2(0.0, 1.0)), hashFn(i + vec2(1.0, 1.0)), f.x),
+        f.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 5; i++) {
+        v += a * noise(p);
+        p *= 2.0;
+        a *= 0.5;
+    }
+    return v;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = uv * 6.0;
+    p.x += iTime * 0.2;
+    p += fbm(p * 0.8 + iTime * 0.1) * (0.5 + u_bass * 0.8);
+    float n = fbm(p + u_mid * 2.0);
+    float n2 = fbm(p * 2.0 - iTime * 0.3);
+    vec3 col = mix(
+        vec3(0.1, 0.2, 0.5),
+        vec3(0.9, 0.4, 0.1),
+        n + u_spectralCentroid * 0.3);
+    col += vec3(0.6, 0.3, 0.8) * n2 * u_treble * 2.0;
+    col += vec3(0.2) * smoothstep(0.0, 1.0, u_beat);
+    col *= 0.8 + 0.4 * u_energy;
+    fragColor = vec4(col, 1.0);
+}
+
+## RULES
+
+1. Use float literals with decimals: 1.0, 0.5, 3.14159
+2. Define helper functions ABOVE where they are called
+3. Every statement ends with a semicolon
+4. for-loop bounds must be compile-time constants
+5. float functions return float, vec3 functions return vec3
+
+## NVIDIA COMPATIBILITY — CRITICAL
+
+NVIDIA's GLSL compiler is STRICT. These patterns compile on Mesa \
+but CRASH on NVIDIA. NEVER use them:
+
+- NEVER write `void(expr);` or `void();` — void is NOT a \
+  constructor. To discard a return value, just call the function: \
+  `myFunc();` not `void(myFunc());`
+- NEVER write `return void;` or `return void(expr);` — in void \
+  functions just write `return;`
+- NEVER name a function `hash` — it collides with an NVIDIA \
+  built-in. Use `hashFn` or `hash21` or `hash13` instead.
+- NEVER pass `void` as an argument: `foo(void)` is only valid \
+  in declarations, not calls.
+
+## OUTPUT
+
+Output ONLY valid GLSL code. No markdown fences, no backticks, \
+no explanation. Helper functions first, then mainImage.\
+"""
+
+
+# ── Regex patterns for sanitising LLM-generated shader code ──────────
+_RE_MARKDOWN_FENCE = _re.compile(
+    r"^```(?:glsl|hlsl|c|cpp)?\s*\n?", _re.MULTILINE,
+)
+_RE_MARKDOWN_CLOSE = _re.compile(r"\n?```\s*$")
+_RE_VERSION = _re.compile(r"^\s*#\s*version\s+.*$", _re.MULTILINE)
+_RE_PRECISION = _re.compile(
+    r"^\s*precision\s+\w+\s+float\s*;.*$", _re.MULTILINE,
+)
+_RE_UNIFORM = _re.compile(
+    r"^\s*uniform\s+\w+\s+"
+    r"(?:iTime|iResolution|u_bass|u_lowMid|u_mid|u_highMid"
+    r"|u_treble|u_energy|u_beat|u_spectralCentroid)\s*;.*$",
+    _re.MULTILINE,
+)
+_RE_OUT_FRAGCOLOR = _re.compile(
+    r"^\s*out\s+vec4\s+fragColor\s*;.*$", _re.MULTILINE,
+)
+_RE_VOID_MAIN = _re.compile(
+    r"void\s+main\s*\(\s*\)\s*\{[^}]*mainImage\s*\([^)]*\)\s*;"
+    r"[^}]*\}",
+    _re.DOTALL,
+)
+# Double braces {{ or }} that the LLM may copy from prompt examples
+_RE_DOUBLE_BRACE_OPEN = _re.compile(r"\{\{")
+_RE_DOUBLE_BRACE_CLOSE = _re.compile(r"\}\}")
+
+_logger = logging.getLogger(__name__)
+
+
+def _find_matching_paren(s: str, start: int) -> int:
+    """Return index of the closing ')' matching the '(' at *start*.
+
+    Handles nested parentheses.  Returns -1 when unmatched.
+    """
+    depth = 0
+    for i in range(start, len(s)):
+        if s[i] == "(":
+            depth += 1
+        elif s[i] == ")":
+            depth -= 1
+            if depth == 0:
+                return i
+    return -1
+
+
+def _strip_void_expressions(code: str) -> str:
+    """Remove all void-as-expression patterns from GLSL code.
+
+    NVIDIA GLSL compilers reject ``void(expr)``, ``void()``,
+    ``return void;``, and ``func(void)`` with "cannot construct
+    this type" — even though Mesa accepts them.  This function
+    aggressively strips ALL such patterns line-by-line so the shader
+    is cross-driver compatible.
+
+    Uses balanced-paren matching to handle nested calls like
+    ``void(sin(x * 2.0))`` correctly.
+    """
+    lines = code.split("\n")
+    fixed: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+
+        # ── Keep function declarations: `void funcName(...)` ─────
+        # These are the ONLY valid use of `void` at line-start
+        # followed by an identifier + paren.
+        if _re.match(r"^void\s+\w+\s*\(", stripped):
+            fixed.append(line)
+            continue
+
+        # ── Remove standalone void(...) expression statements ────
+        # Match `void(` then find its balanced `)`, check if that's
+        # the whole statement (possibly with trailing `;`).
+        m_void_stmt = _re.match(r"^(\s*)void\s*\(", line)
+        if m_void_stmt:
+            paren_start = line.index("(", m_void_stmt.start())
+            paren_end = _find_matching_paren(line, paren_start)
+            if paren_end != -1:
+                after = line[paren_end + 1:].strip()
+                if after in ("", ";"):
+                    _logger.debug(
+                        "Stripped void expression: %s", stripped,
+                    )
+                    continue
+
+        # ── Fix `return void;` and `return void(...)` → `return;`
+        m_ret = _re.search(r"\breturn\s+void\b", line)
+        if m_ret:
+            # Check for `return void(...)` with balanced parens
+            after_void = line[m_ret.end():]
+            m_paren = _re.match(r"\s*\(", after_void)
+            if m_paren:
+                paren_idx = m_ret.end() + after_void.index("(")
+                paren_close = _find_matching_paren(line, paren_idx)
+                if paren_close != -1:
+                    line = (
+                        line[:m_ret.start()]
+                        + "return"
+                        + line[paren_close + 1:]
+                    )
+            else:
+                line = _re.sub(
+                    r"\breturn\s+void\s*;", "return;", line,
+                )
+
+        # ── Fix `func(void)` calls → `func()` ──────────────────
+        # In GLSL, void as a function argument is invalid in calls.
+        line = _re.sub(r"(\w+\s*\(\s*)void(\s*\))", r"\1\2", line)
+
+        # ── Fix void cast in expression: `void(expr)` → `expr` ──
+        # Use balanced-paren matching for nested calls.
+        while True:
+            m_cast = _re.search(r"\bvoid\s*\(", line)
+            if not m_cast:
+                break
+            # Skip if this is a function declaration
+            before = line[:m_cast.start()].rstrip()
+            if not before or _re.match(
+                r"^void\s+\w+\s*$", line[:m_cast.end()],
+            ):
+                break
+            paren_start = m_cast.end() - 1
+            paren_end = _find_matching_paren(line, paren_start)
+            if paren_end == -1:
+                break
+            inner = line[paren_start + 1:paren_end]
+            line = line[:m_cast.start()] + inner + line[paren_end + 1:]
+
+        fixed.append(line)
+    return "\n".join(fixed)
+
+
+def _rename_nvidia_reserved(code: str) -> str:
+    """Rename user-defined functions that collide with NVIDIA built-ins.
+
+    NVIDIA's GLSL compiler exposes ``hash`` as a built-in in some
+    extension contexts, causing 'no matching overloaded function
+    found' when user code defines ``float hash(vec2 p)``.  We
+    rename all occurrences to ``hashFn`` to avoid the collision.
+    """
+    # Only rename if the user actually defines hash as a function
+    if not _re.search(r"\b(?:float|vec[234]|int)\s+hash\s*\(", code):
+        return code
+    # Rename the definition + all call sites
+    code = _re.sub(r"\bhash\b", "hashFn", code)
+    return code
+
+
+def _fix_missing_semicolons(code: str) -> str:
+    """Insert missing semicolons before function declarations.
+
+    The LLM often omits the semicolon on the last statement before a
+    new top-level function, causing "unexpected VOID/FLOAT" errors.
+    """
+    type_keywords = {
+        "void", "float", "int", "vec2", "vec3", "vec4",
+        "mat2", "mat3", "mat4", "bool", "ivec2", "ivec3", "ivec4",
+    }
+    lines = code.split("\n")
+    fixed: list[str] = []
+    for i, line in enumerate(lines):
+        fixed.append(line)
+        if i + 1 >= len(lines):
+            continue
+        next_stripped = lines[i + 1].lstrip()
+        next_first_word = next_stripped.split("(")[0].split()
+        if not next_first_word:
+            continue
+        if (
+            lines[i + 1]
+            and not lines[i + 1][0].isspace()
+            and next_first_word[0] in type_keywords
+            and "(" in lines[i + 1]
+        ):
+            cur_stripped = line.rstrip()
+            if cur_stripped and cur_stripped[-1] not in (
+                ";", "{", "}", "/", "*", ",", "(", ")",
+            ):
+                fixed[-1] = line.rstrip() + ";"
+    return "\n".join(fixed)
+
+
+def sanitize_shader_code(raw: str) -> str:
+    """Clean up common LLM mistakes in generated GLSL code.
+
+    Handles:
+    - Markdown fences
+    - Duplicate uniform / out / #version / precision declarations
+    - Wrapper void main() that the host already provides
+    - ALL void-as-expression patterns (NVIDIA compat)
+    - NVIDIA reserved name collisions (``hash`` → ``hashFn``)
+    - Double braces ``{{`` / ``}}``
+    - Missing semicolons before function declarations
+    - Stray backslash line continuations
+    """
+    code = raw.strip()
+
+    # ── Strip markdown fences ────────────────────────────────
+    code = _RE_MARKDOWN_FENCE.sub("", code)
+    code = _RE_MARKDOWN_CLOSE.sub("", code)
+
+    # ── Strip #version directive (wrapper adds it) ───────────
+    code = _RE_VERSION.sub("", code)
+
+    # ── Strip precision qualifier (wrapper adds it) ──────────
+    code = _RE_PRECISION.sub("", code)
+
+    # ── Strip redeclared uniforms ────────────────────────────
+    code = _RE_UNIFORM.sub("", code)
+
+    # ── Strip duplicate `out vec4 fragColor;` ────────────────
+    code = _RE_OUT_FRAGCOLOR.sub("", code)
+
+    # ── Strip void main() wrapper ────────────────────────────
+    code = _RE_VOID_MAIN.sub("", code)
+
+    # ── Fix ALL void-as-expression patterns ──────────────────
+    # This is the big one: NVIDIA rejects void(expr), void(),
+    # return void;, func(void) — even though Mesa accepts them.
+    code = _strip_void_expressions(code)
+
+    # ── Rename NVIDIA reserved names ─────────────────────────
+    # NVIDIA exposes `hash` as a built-in; user defs collide.
+    code = _rename_nvidia_reserved(code)
+
+    # ── Fix double braces {{ → { and }} → } ─────────────────
+    code = _RE_DOUBLE_BRACE_OPEN.sub("{", code)
+    code = _RE_DOUBLE_BRACE_CLOSE.sub("}", code)
+
+    # ── Strip stray backslash line continuations ─────────────
+    code = _re.sub(r"\\\n", "\n", code)
+
+    # ── Fix missing semicolons before function declarations ──
+    code = _fix_missing_semicolons(code)
+
+    # ── Collapse excessive blank lines ───────────────────────
+    code = _re.sub(r"\n{3,}", "\n\n", code)
+
+    return code.strip()
 
 
 class LLMService:
     """Gemini Flash integration for thematic analysis and conversational refinement."""
 
     def __init__(self) -> None:
-        self._model = None
+        self._client: genai.Client | None = None
 
-    def _get_model(self):  # type: ignore[no-untyped-def]
-        if self._model is None:
-            import google.generativeai as genai
+    def _get_client(self) -> genai.Client:
+        if self._client is None:
+            api_key = settings.google_ai_api_key
+            if not api_key:
+                raise RuntimeError(
+                    "GOOGLE_AI_API_KEY is not set. Please set it in your .env file or environment."
+                )
+            self._client = genai.Client(api_key=api_key)
+        return self._client
 
-            genai.configure(api_key=settings.google_ai_api_key)
-            self._model = genai.GenerativeModel(
-                "gemini-2.0-flash",
-                system_instruction=SYSTEM_PROMPT,
+    @staticmethod
+    def _build_history(
+        messages: list[ChatMessage],
+        audio_context: str = "",
+    ) -> list[types.Content]:
+        """Convert ChatMessages into Gemini Content objects.
+
+        If *audio_context* is provided it is prepended to the first user
+        message so the LLM has full analysis data on every call.
+        """
+        history: list[types.Content] = []
+
+        if audio_context and messages:
+            first_msg = messages[0]
+            augmented = (
+                f"{audio_context}\n\n---\n\nUser request: {first_msg.content}"
             )
-        return self._model
+            history.append(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=augmented)],
+                )
+            )
+            remaining = messages[1:]
+        else:
+            remaining = list(messages)
+
+        for msg in remaining:
+            role = "user" if msg.role == "user" else "model"
+            history.append(
+                types.Content(
+                    role=role,
+                    parts=[types.Part.from_text(text=msg.content)],
+                )
+            )
+
+        return history
 
     async def stream_chat(
         self,
         messages: list[ChatMessage],
         audio_context: str = "",
     ) -> AsyncGenerator[str]:
-        """Stream a chat response from Gemini Flash."""
-        model = self._get_model()
+        """Stream a chat response from Gemini Flash.
 
-        # Build the conversation history for Gemini
-        gemini_history: list[dict[str, str]] = []
-
-        # If we have audio context, prepend it as the first user message context
-        if audio_context and messages:
-            first_msg = messages[0]
-            augmented_content = f"{audio_context}\n\n---\n\nUser request: {first_msg.content}"
-            gemini_history.append({"role": "user", "parts": [augmented_content]})
-
-            # Add remaining messages
-            for msg in messages[1:]:
-                role = "user" if msg.role == "user" else "model"
-                gemini_history.append({"role": role, "parts": [msg.content]})
-        else:
-            for msg in messages:
-                role = "user" if msg.role == "user" else "model"
-                gemini_history.append({"role": role, "parts": [msg.content]})
-
-        # The last message is the new user input — remove it from history
-        # and use it as the send_message content
-        if not gemini_history:
+        Retries up to 3 times on rate-limit (429) errors with backoff.
+        """
+        if not messages:
             yield "I need a message to respond to. Please describe what you'd like for your visualization."
             return
 
-        last_message = gemini_history.pop()
-        chat = model.start_chat(history=gemini_history if gemini_history else [])
+        client = self._get_client()
 
-        try:
-            response = chat.send_message(
-                last_message["parts"],
-                stream=True,
-                generation_config={
-                    "temperature": 0.8,
-                    "top_p": 0.95,
-                    "max_output_tokens": 4096,
-                },
-            )
+        history = self._build_history(messages, audio_context)
 
-            for chunk in response:
-                if chunk.text:
-                    yield chunk.text
+        # The last message is the new user input — remove from history for send_message
+        last_content = history.pop()
 
-        except Exception:
-            logger.exception("Gemini API error")
-            yield "\n\n*I encountered an error communicating with the AI service. Please try again.*"
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.8,
+            top_p=0.95,
+            max_output_tokens=8192,
+        )
+
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                chat = client.aio.chats.create(
+                    model=settings.gemini_model,
+                    history=history if history else None,
+                    config=config,
+                )
+
+                response = await chat.send_message_stream(
+                    last_content.parts[0].text if last_content.parts else "",
+                )
+
+                async for chunk in response:
+                    if chunk.text:
+                        yield chunk.text
+
+                return  # Success — stop retrying
+
+            except ClientError as e:
+                if e.code == 429:
+                    err_str = str(e)
+                    is_daily = "PerDay" in err_str or "per day" in err_str.lower()
+
+                    if is_daily:
+                        logger.warning("Daily Gemini quota exhausted")
+                        yield (
+                            "\n\n*Daily API quota has been reached. "
+                            "The free tier allows 20 requests per day. "
+                            "Please try again tomorrow or add billing at "
+                            "https://ai.google.dev to increase your quota.*"
+                        )
+                        return
+
+                    if attempt < max_retries:
+                        delay = 15.0
+                        match = _re.search(
+                            r"retry in ([\d.]+)s", err_str, _re.IGNORECASE,
+                        )
+                        if match:
+                            delay = float(match.group(1)) + 1.0
+                        logger.warning(
+                            "Rate limited on stream_chat (attempt %d/%d), "
+                            "retrying in %.1fs",
+                            attempt + 1, max_retries, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
+                logger.exception("Gemini API error")
+                yield (
+                    "\n\n*I encountered an error communicating with "
+                    "the AI service. Please try again.*"
+                )
+                return
+
+            except Exception:
+                logger.exception("Gemini API error")
+                yield (
+                    "\n\n*I encountered an error communicating with "
+                    "the AI service. Please try again.*"
+                )
+                return
 
     async def generate_thematic_analysis(
         self,
@@ -121,11 +757,348 @@ User's vision: {user_prompt if user_prompt else "No specific vision provided —
 Please provide:
 1. **Track Overview** — Genre, mood, emotional arc, narrative summary
 2. **Thematic Analysis** — Core themes, symbolism, metaphors, pop culture references
-3. **Section-by-Section Visualization** — For each detected section, suggest colors (hex), motion style, imagery, and an AI keyframe prompt
-4. **Overall Visual Concept** — Recommended template style, consistent motifs, lyrics display approach
+3. **Visual Concept** — Describe the shader-based visual aesthetic (raymarching, fractals, particles, etc.)
+4. **Section-by-Section Visualization** — For each detected section, suggest colors (hex), shader techniques, audio mappings, and an AI keyframe prompt
+5. **Shader Description** — A detailed description for the GLSL shader generator
 
 End with 1-2 follow-up questions to refine the concept."""
 
         messages = [ChatMessage(role="user", content=analysis_prompt)]
         async for chunk in self.stream_chat(messages, ""):
             yield chunk
+
+    async def extract_render_spec(
+        self,
+        messages: list[ChatMessage],
+        audio_context: str,
+    ) -> dict | None:
+        """Extract a structured render spec from the conversation.
+
+        Retries up to 3 times on rate-limit (429) errors with backoff.
+        Returns the parsed JSON dict or None if extraction fails.
+        """
+        client = self._get_client()
+
+        history = self._build_history(messages, audio_context)
+
+        # Add the extraction prompt as a final user message
+        history.append(
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=RENDER_SPEC_EXTRACTION_PROMPT)],
+            )
+        )
+        last_content = history.pop()
+
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.2,
+            max_output_tokens=4096,
+        )
+
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                chat = client.aio.chats.create(
+                    model=settings.gemini_model,
+                    history=history if history else None,
+                    config=config,
+                )
+
+                response = await chat.send_message(
+                    last_content.parts[0].text if last_content.parts else "",
+                )
+
+                raw = response.text.strip()
+                # Strip markdown fences if present
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[: raw.rfind("```")]
+                raw = raw.strip()
+
+                return json.loads(raw)
+
+            except ClientError as e:
+                if e.code == 429:
+                    err_str = str(e)
+                    is_daily = "PerDay" in err_str or "per day" in err_str.lower()
+
+                    if is_daily:
+                        logger.warning("Daily Gemini quota exhausted during render spec extraction")
+                        return None
+
+                    if attempt < max_retries:
+                        delay = 15.0
+                        match = _re.search(r"retry in ([\d.]+)s", err_str, _re.IGNORECASE)
+                        if match:
+                            delay = float(match.group(1)) + 1.0
+                        logger.warning(
+                            "Rate limited on render spec extraction (attempt %d/%d), "
+                            "retrying in %.1fs",
+                            attempt + 1, max_retries, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+                logger.exception("Gemini API error extracting render spec")
+                return None
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse render spec JSON from LLM response")
+                return None
+            except Exception:
+                logger.exception("Error extracting render spec")
+                return None
+
+        return None
+
+    async def _call_shader_llm(
+        self,
+        user_prompt: str,
+        temperature: float = 0.8,
+    ) -> str | None:
+        """Send a single shader-generation request to the LLM.
+
+        Handles rate-limit retries internally. Returns sanitized GLSL or
+        ``None`` on total failure.
+        """
+        client = self._get_client()
+        config = types.GenerateContentConfig(
+            system_instruction=SHADER_SYSTEM_PROMPT,
+            temperature=temperature,
+            top_p=0.95,
+            max_output_tokens=8192,
+        )
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                response = await client.aio.models.generate_content(
+                    model=settings.gemini_model,
+                    contents=user_prompt,
+                    config=config,
+                )
+                raw = response.text.strip()
+                sanitized = sanitize_shader_code(raw)
+                # Log first 40 lines at INFO so compilation failures
+                # can be diagnosed from server output.
+                preview = "\n".join(
+                    sanitized.splitlines()[:40],
+                )
+                logger.info(
+                    "Generated shader (%d lines, %d chars):\n%s%s",
+                    len(sanitized.splitlines()),
+                    len(sanitized),
+                    preview,
+                    "\n..." if len(sanitized.splitlines()) > 40
+                    else "",
+                )
+                return sanitized
+            except ClientError as e:
+                if e.code == 429 and attempt < max_retries:
+                    delay = 15.0
+                    m = _re.search(
+                        r"retry in ([\d.]+)s", str(e), _re.IGNORECASE,
+                    )
+                    if m:
+                        delay = float(m.group(1)) + 1.0
+                    logger.warning(
+                        "Rate limited on shader gen "
+                        "(attempt %d/%d), retrying in %.1fs",
+                        attempt + 1, max_retries, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.exception("Gemini API error generating shader")
+                return None
+            except Exception:
+                logger.exception("Error generating shader")
+                return None
+        return None
+
+    async def generate_shader(
+        self,
+        description: str,
+        mood_tags: list[str] | None = None,
+        color_palette: list[str] | None = None,
+    ) -> str | None:
+        """Generate a new shader (initial attempt, no error context)."""
+        mood_str = (
+            ", ".join(mood_tags) if mood_tags else "energetic, dynamic"
+        )
+        color_hint = ""
+        if color_palette:
+            color_hint = (
+                "\nPrefer these colors: "
+                f"{', '.join(color_palette)}"
+            )
+        prompt = (
+            "Create a visually stunning, music-reactive GLSL "
+            "fragment shader.\n\n"
+            f"Visual concept: {description}\n"
+            f"Mood: {mood_str}{color_hint}\n\n"
+            "Use advanced techniques appropriate to the "
+            "concept — raymarching, SDFs, fractals, fbm "
+            "noise, domain warping, Voronoi, particle "
+            "fields, polar transforms, flow fields, "
+            "whatever best serves the visual. Use hundreds "
+            "or thousands of points/iterations if it "
+            "makes the image more beautiful.\n\n"
+            "Every audio uniform should drive some visual "
+            "parameter. Make it breathtaking.\n\n"
+            "CRITICAL: Do NOT use void() as a constructor "
+            "or expression. Do NOT name any function 'hash' "
+            "(use 'hashFn' instead). Do NOT write "
+            "'return void;'.\n\n"
+            "Output ONLY GLSL code."
+        )
+        return await self._call_shader_llm(prompt, temperature=0.85)
+
+    async def fix_shader(
+        self,
+        previous_code: str,
+        compile_error: str,
+        description: str,
+    ) -> str | None:
+        """Ask the LLM to fix a broken shader while preserving its
+        visual quality.
+
+        The prompt references the *original description* so the LLM
+        remembers what it's supposed to depict, and pinpoints the exact
+        error location.
+        """
+        # ── Extract line numbers from ALL errors ─────────────
+        error_lines: list[int] = []
+        for m in _re.finditer(r"ERROR:\s*0:(\d+):", compile_error):
+            err_line = int(m.group(1))
+            # The wrapper prepends exactly 16 lines
+            user_line = max(1, err_line - 16)
+            error_lines.append(user_line)
+
+        lines = previous_code.splitlines()
+        line_hint = ""
+        if error_lines:
+            # Show context around each error line (deduplicated)
+            shown: set[int] = set()
+            snippets: list[str] = []
+            for user_line in dict.fromkeys(error_lines):
+                start = max(0, user_line - 3)
+                end = min(len(lines), user_line + 4)
+                snippet = "\n".join(
+                    f"{'>>>' if i + 1 == user_line else '   '} "
+                    f"{i + 1}: {lines[i]}"
+                    for i in range(start, end)
+                    if i not in shown
+                )
+                shown.update(range(start, end))
+                if snippet:
+                    snippets.append(snippet)
+            if snippets:
+                line_hint = (
+                    "\nError location(s) in your code:\n"
+                    + "\n---\n".join(snippets)
+                    + "\n"
+                )
+
+        # Classify the error type for more targeted advice
+        error_lower = compile_error.lower()
+        specific_advice = ""
+        if "undeclared identifier" in error_lower:
+            # Extract the identifier name
+            id_match = _re.search(
+                r"'(\w+)'\s*:\s*undeclared identifier",
+                compile_error,
+            )
+            if id_match:
+                ident = id_match.group(1)
+                specific_advice = (
+                    f"The identifier '{ident}' is used but never "
+                    f"defined. Either:\n"
+                    f"- You forgot to define the function '{ident}' "
+                    f"above where it's called\n"
+                    f"- You defined it with a different name "
+                    f"(typo in the name)\n"
+                    f"- The definition was accidentally removed\n"
+                    f"Make sure every function is DEFINED "
+                    f"ABOVE its first use.\n\n"
+                )
+        elif "cannot construct this type" in error_lower:
+            specific_advice = (
+                "NVIDIA ERROR: You used `void` as a constructor or "
+                "expression. Common causes:\n"
+                "- `void(expr);` — just call the function directly\n"
+                "- `return void;` or `return void(expr);` — use "
+                "`return;` with no value\n"
+                "- `void();` — remove the line entirely\n"
+                "Find EVERY `void(` that is NOT a function "
+                "declaration and remove/fix it.\n\n"
+            )
+        elif "no matching overloaded function" in error_lower:
+            fn_match = _re.search(
+                r"'(\w+)'\s*:\s*no matching overloaded",
+                compile_error,
+            )
+            fn_name = fn_match.group(1) if fn_match else "unknown"
+            specific_advice = (
+                f"NVIDIA ERROR: '{fn_name}' collides with an NVIDIA "
+                f"built-in function. Rename your function to "
+                f"'{fn_name}Fn' everywhere (definition + all calls)."
+                f"\n\n"
+            )
+        elif "cannot convert return value" in error_lower:
+            specific_advice = (
+                "A function's return statement has the wrong "
+                "type. Check that float functions return float, "
+                "vec3 functions return vec3, etc. Use explicit "
+                "constructors like float(...) or vec3(...).\n\n"
+            )
+
+        prompt = (
+            f"This shader was meant to depict: {description}\n\n"
+            f"It FAILED to compile with this error:\n"
+            f"{compile_error}\n"
+            f"{line_hint}\n"
+            f"{specific_advice}"
+            f"Broken shader:\n{previous_code}\n\n"
+            "Fix ONLY the compilation error(s). Preserve "
+            "all the visual quality, effects, and audio "
+            "reactivity of the original shader.\n\n"
+            "REMEMBER: The wrapper provides #version 330, "
+            "all uniforms, out vec4 fragColor, and void "
+            "main(). Do NOT redeclare those.\n\n"
+            "NVIDIA RULES: Never use void() as constructor/"
+            "expression. Never write 'return void;'. Never "
+            "name a function 'hash' (use 'hashFn'). These "
+            "all crash on NVIDIA GPUs.\n\n"
+            "Output ONLY the complete corrected GLSL code. "
+            "No markdown fences, no explanation."
+        )
+        return await self._call_shader_llm(prompt, temperature=0.4)
+
+    async def generate_shader_simple(
+        self,
+        description: str,
+        mood_tags: list[str] | None = None,
+    ) -> str | None:
+        """Generate a fresh shader with emphasis on compilability.
+
+        Still aims for visual beauty — uses the full description and
+        mood — but steers toward techniques less prone to syntax errors.
+        """
+        mood_str = (
+            ", ".join(mood_tags) if mood_tags else "energetic, dynamic"
+        )
+        prompt = (
+            f"Create a stunning audio-reactive GLSL shader.\n\n"
+            f"Visual concept: {description}\n"
+            f"Mood: {mood_str}\n\n"
+            "Use visually impressive techniques: domain "
+            "warping, fbm noise, iq palette, polar distortion, "
+            "Voronoi, layered sin patterns, flow fields, "
+            "tunnel effects. Keep under 80 lines.\n\n"
+            "Every audio uniform should drive a visual "
+            "parameter. Make it look gorgeous.\n\n"
+            "CRITICAL: Do NOT use void() as a constructor. "
+            "Do NOT name any function 'hash' (use 'hashFn'). "
+            "Do NOT write 'return void;'.\n\n"
+            "Output ONLY GLSL code. No markdown."
+        )
+        return await self._call_shader_llm(prompt, temperature=0.6)
