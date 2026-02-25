@@ -10,12 +10,19 @@ export function ChatPage() {
 
   return (
     <div className="flex h-full flex-col">
-      {/* Analysis in progress, chat not ready yet */}
+      {/* Analysis checklist — always visible on chat page */}
+      {(isAnalyzing || showChat) && (
+        <div className="border-b border-border bg-bg-secondary px-6 py-3">
+          <AnalysisProgress />
+        </div>
+      )}
+
+      {/* Waiting state — analysis not yet done, no chat */}
       {isAnalyzing && !showChat && (
         <div className="flex flex-1 items-center justify-center p-8">
-          <div className="w-full max-w-md">
-            <AnalysisProgress />
-          </div>
+          <p className="text-sm text-text-secondary animate-pulse">
+            Analyzing your track...
+          </p>
         </div>
       )}
 
