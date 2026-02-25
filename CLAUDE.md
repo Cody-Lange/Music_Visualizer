@@ -173,16 +173,20 @@ The server-side shader pipeline runs on ModernGL with the host GPU's GLSL compil
 
 1. **`void()` as expression/constructor** — NVIDIA rejects `void(expr);`, `void();`, `return void;` which Mesa silently accepts. The sanitizer (`_strip_void_expressions` in `llm_service.py`) uses balanced-paren matching to strip all such patterns, and the NVIDIA static checker (`_nvidia_static_check` in `shader_render_service.py`) catches anything that slips through.
 
-2. **`hash` function name collision** — NVIDIA exposes `hash` as a built-in; user-defined `float hash(vec2 p)` causes "no matching overloaded function found". The sanitizer renames `hash` → `hashFn` via `_rename_nvidia_reserved()`.
+2. **Reserved function name collisions** — NVIDIA exposes `hash`, `noise`, `input`, `output` as built-ins; user-defined functions with these names cause "no matching overloaded function found". The sanitizer renames them via `_rename_nvidia_reserved()` (e.g. `hash` → `hashFn`, `noise` → `noiseFn`).
 
 3. **Missing semicolons** — The LLM sometimes omits semicolons before function declarations, causing `unexpected VOID` errors. The sanitizer (`_fix_missing_semicolons`) detects and inserts them.
 
-4. **Defense-in-depth in `_try_compile()`** — Every compile attempt runs: `sanitize_shader_code()` → `_nvidia_static_check()` → actual GL compile. This ensures patterns are caught even on Mesa servers.
+4. **Integer literals in constructors** — NVIDIA rejects `vec3(1, 0, 0)`; requires `vec3(1.0, 0.0, 0.0)`. The sanitizer (`_fix_int_literals_in_constructors`) converts bare integers to float literals inside vec/mat constructors.
 
-5. **LLM prompt guardrails** — `SHADER_SYSTEM_PROMPT` has an explicit "NVIDIA COMPATIBILITY" section forbidding void constructors, `hash` as a name, and `return void`. All generation and fix prompts reinforce these rules.
+5. **Float modulo operator** — NVIDIA rejects `%` on float operands; must use `mod()`. The sanitizer (`_fix_modulo_on_floats`) replaces `a % b` with `mod(a, b)` in float contexts.
+
+6. **Defense-in-depth in `_try_compile()`** — Every compile attempt runs: `sanitize_shader_code()` → `_nvidia_static_check()` → actual GL compile. This ensures patterns are caught even on Mesa servers.
+
+7. **LLM prompt guardrails** — `SHADER_SYSTEM_PROMPT` has an explicit "NVIDIA COMPATIBILITY" section forbidding void constructors, `hash`/`noise` as names, `return void`, bare integer literals, and `%` on floats. All generation and fix prompts reinforce these rules with 4 advanced examples.
 
 If shaders still fail to compile on NVIDIA, the relevant files are:
-- `server/app/services/llm_service.py` — `SHADER_SYSTEM_PROMPT`, `sanitize_shader_code()`, `_strip_void_expressions()`, `_rename_nvidia_reserved()`
+- `server/app/services/llm_service.py` — `SHADER_SYSTEM_PROMPT`, `sanitize_shader_code()`, `_strip_void_expressions()`, `_rename_nvidia_reserved()`, `_fix_int_literals_in_constructors()`, `_fix_modulo_on_floats()`
 - `server/app/services/shader_render_service.py` — `_nvidia_static_check()`, `_try_compile()`
 - `server/app/api/shader.py` — `_generate_and_validate()` retry pipeline
 
@@ -191,6 +195,8 @@ If shaders still fail to compile on NVIDIA, the relevant files are:
 - **Server wrapper** (GLSL 330): `#version 330` + `precision highp float;` + uniforms + `out vec4 fragColor;` + `void main() { mainImage(fragColor, gl_FragCoord.xy); }` — in `server/app/services/shader_render_service.py` (`_FRAGMENT_WRAPPER`)
 - Both wrappers expect user code to define `void mainImage(out vec4 fragColor, in vec2 fragCoord)`
 - 10 audio uniforms: `iTime`, `iResolution`, `u_bass`, `u_lowMid`, `u_mid`, `u_highMid`, `u_treble`, `u_energy`, `u_beat`, `u_spectralCentroid`
+- Shaders should be COMPLEX and artistically ambitious — raymarching with 100+ steps, IFS fractals, domain repetition for 1000s of objects, multi-octave fbm, Voronoi, sophisticated lighting. The LLM prompt includes 4 examples ranging from basic to advanced. Never simplify shaders to "fix" compile errors — fix only the error while preserving all complexity.
+- 7 curated fallback shaders cover: plasma, kaleidoscope, tunnel, waves, sphere, Menger fractal, infinite orb grid
 
 ## Coding Conventions
 

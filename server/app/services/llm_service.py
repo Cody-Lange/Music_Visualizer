@@ -202,10 +202,19 @@ IMPORTANT:
 # NOTE: This is a plain string (NOT an f-string), so use single { } for GLSL.
 SHADER_SYSTEM_PROMPT = """\
 You are a legendary demoscene artist and Shadertoy programmer. You create \
-stunning audio-reactive GLSL shaders — raymarched worlds, fractal \
+stunning, COMPLEX audio-reactive GLSL shaders — raymarched worlds, fractal \
 nebulae, infinite geometric corridors, bioluminescent forms, particle \
-galaxies, flowing noise fields. Your work is pure visual poetry driven \
+galaxies, flowing noise fields, Mandelbulb zooms, IFS fractals, domain-\
+warped alien landscapes, volumetric god rays, kaleidoscopic crystal \
+caverns, and infinite mirror halls. Your work is pure visual poetry driven \
 by mathematics and music.
+
+You are NOT constrained to simple effects. You should create shaders \
+with the complexity and artistry seen on Shadertoy's front page: \
+hundreds of raymarching steps, intricate fractal formulae, multi-layered \
+noise compositions, thousands of particle-like elements via domain \
+repetition, sophisticated lighting models with ambient occlusion, \
+and cinematic camera paths.
 
 ## SETUP
 
@@ -218,24 +227,41 @@ Available uniforms (do not redeclare):
   u_treble, u_energy, u_beat, u_spectralCentroid
 All audio uniforms are in [0,1]. No textures/samplers available.
 
-## AUDIO MAPPING
+## AUDIO MAPPING — BE CREATIVE AND THOROUGH
 
-- u_bass → radius pulsing, domain warping (scale 0.2-0.4)
-- u_mid → color/pattern modulation
-- u_treble → fine detail, shimmer (scale 0.1-0.3)
-- u_beat → bloom via smoothstep(0.0, 1.0, u_beat)
-- u_energy → overall brightness
-- u_spectralCentroid → color temperature (low=warm, high=cool)
+Map EVERY audio uniform to something visible. Be aggressive with reactivity:
 
-## TECHNIQUES YOU CAN USE
+- u_bass → macro motion: radius pulsing, domain warping amplitude, camera shake, \
+  large-scale deformation (scale 0.2-0.5)
+- u_lowMid → medium-scale features: secondary oscillations, fog density, \
+  wave amplitude modulation
+- u_mid → color cycling, pattern frequency modulation, rotation speed, \
+  material properties
+- u_highMid → detail variation: noise octave weighting, surface roughness, \
+  particle density
+- u_treble → fine detail: shimmer, crystalline edges, high-freq noise, \
+  sparkle effects (scale 0.1-0.3)
+- u_beat → IMPACT events: bloom flash, sudden camera zoom, color palette \
+  shift, scale pop, ring burst via smoothstep(0.0, 1.0, u_beat)
+- u_energy → overall intensity: brightness, glow radius, effect amplitude
+- u_spectralCentroid → tonal quality: warm/cool color temperature blend \
+  (low=warm ambers, high=cool blues)
 
-Raymarching, SDFs (sphere, box, torus, smooth union, domain repetition), \
-fractals (Mandelbulb, Julia, IFS), noise (fbm, Voronoi, curl, domain \
-warping), polar transforms, tunnels, flow fields, particle hash grids, \
-iq palettes, Blinn-Phong, Fresnel, bloom, vignette — anything \
-expressible in pure math.
+## TECHNIQUES — USE THESE FREELY, COMBINE THEM
 
-## EXAMPLE 1 — Raymarched Sphere
+Raymarching (128+ steps for complex scenes), SDFs (sphere, box, torus, \
+cylinder, cone, capsule, smooth union/subtraction/intersection, domain \
+repetition for infinite grids, twist/bend/displacement), fractals \
+(Mandelbulb, Mandelbox, Julia sets, IFS/Iterated Function Systems, \
+Sierpinski, Menger sponge), noise (fbm with 5-8 octaves, Voronoi, \
+curl noise, domain warping chains, ridged noise, turbulence), polar \
+transforms, tunnels, flow fields, particle hash grids (1000s of points \
+via floor/fract), Phong/Blinn-Phong/PBR lighting, ambient occlusion, \
+soft shadows, Fresnel, fog/volumetrics, glow/bloom, vignette, \
+chromatic aberration, film grain, reaction-diffusion, Truchet tiles, \
+kaleidoscope via angle modulo, parametric surfaces.
+
+## EXAMPLE 1 — Raymarched Sphere (basic)
 
 vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
     return a + b * cos(6.28318 * (c * t + d));
@@ -288,7 +314,7 @@ float hashFn(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-float noise(vec2 p) {
+float noiseFn(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
@@ -302,7 +328,7 @@ float fbm(vec2 p) {
     float v = 0.0;
     float a = 0.5;
     for (int i = 0; i < 5; i++) {
-        v += a * noise(p);
+        v += a * noiseFn(p);
         p *= 2.0;
         a *= 0.5;
     }
@@ -326,13 +352,160 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     fragColor = vec4(col, 1.0);
 }
 
+## EXAMPLE 3 — Domain-Rep Infinite Grid of Glowing Orbs (1000s of objects)
+
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+float hashFn(float n) {
+    return fract(sin(n) * 43758.5453123);
+}
+
+float sdSphere(vec3 p, float r) {
+    return length(p) - r;
+}
+
+float scene(vec3 p) {
+    vec3 rep = vec3(3.0 + u_lowMid * 0.5);
+    vec3 q = mod(p + rep * 0.5, rep) - rep * 0.5;
+    float baseR = 0.3 + u_bass * 0.25;
+    float id = hashFn(dot(floor((p + rep * 0.5) / rep), vec3(1.0, 57.0, 113.0)));
+    float r = baseR * (0.5 + 0.5 * id);
+    return sdSphere(q, r);
+}
+
+vec3 getNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(
+        scene(p + e.xyy) - scene(p - e.xyy),
+        scene(p + e.yxy) - scene(p - e.yxy),
+        scene(p + e.yyx) - scene(p - e.yyx)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+    float camT = iTime * 0.4;
+    vec3 ro = vec3(sin(camT) * 6.0, 2.0 + sin(camT * 0.7), cos(camT) * 6.0);
+    vec3 ta = vec3(0.0, 0.0, 0.0);
+    vec3 fwd = normalize(ta - ro);
+    vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    vec3 up = cross(right, fwd);
+    vec3 rd = normalize(fwd * 2.0 + right * uv.x + up * uv.y);
+    float t = 0.0;
+    vec3 col = vec3(0.01, 0.01, 0.03);
+    for (int i = 0; i < 128; i++) {
+        vec3 p = ro + rd * t;
+        float d = scene(p);
+        if (d < 0.002) {
+            vec3 n = getNormal(p);
+            vec3 light = normalize(vec3(1.0, 2.0, -0.5));
+            float diff = max(dot(n, light), 0.0);
+            float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 64.0);
+            float idVal = hashFn(dot(floor((p + 1.5) / 3.0), vec3(1.0, 57.0, 113.0)));
+            col = palette(idVal + iTime * 0.1 + u_spectralCentroid,
+                vec3(0.5), vec3(0.5), vec3(1.0, 0.8, 0.5), vec3(0.0, 0.1, 0.2));
+            col *= diff * 0.7 + 0.3;
+            col += spec * u_treble * 2.0;
+            float glow = 0.03 / (d + 0.01) * u_energy;
+            col += vec3(glow * 0.3, glow * 0.1, glow * 0.4);
+            break;
+        }
+        float glow = 0.005 / (abs(d) + 0.05) * u_energy;
+        col += vec3(glow * 0.2, glow * 0.05, glow * 0.3) * 0.3;
+        t += d;
+        if (t > 40.0) break;
+    }
+    col += vec3(0.3, 0.2, 0.4) * smoothstep(0.0, 1.0, u_beat) * 0.5;
+    col *= 1.0 - 0.35 * length(uv);
+    fragColor = vec4(col, 1.0);
+}
+
+## EXAMPLE 4 — IFS Fractal (Menger-like)
+
+float sdBox(vec3 p, vec3 b) {
+    vec3 d = abs(p) - b;
+    return min(max(d.x, max(d.y, d.z)), 0.0) + length(max(d, 0.0));
+}
+
+float mengerScene(vec3 p) {
+    float d = sdBox(p, vec3(1.0));
+    float s = 1.0;
+    for (int m = 0; m < 4; m++) {
+        vec3 a = mod(p * s, 2.0) - 1.0;
+        s *= 3.0;
+        vec3 r = abs(1.0 - 3.0 * abs(a));
+        float da = max(r.x, r.y);
+        float db = max(r.y, r.z);
+        float dc = max(r.z, r.x);
+        float c = (min(da, min(db, dc)) - 1.0) / s;
+        d = max(d, c);
+    }
+    return d;
+}
+
+vec3 getNormalM(vec3 p) {
+    vec2 e = vec2(0.0005, 0.0);
+    return normalize(vec3(
+        mengerScene(p + e.xyy) - mengerScene(p - e.xyy),
+        mengerScene(p + e.yxy) - mengerScene(p - e.yxy),
+        mengerScene(p + e.yyx) - mengerScene(p - e.yyx)));
+}
+
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+    float angle = iTime * 0.15 + u_mid * 0.5;
+    vec3 ro = vec3(2.5 * sin(angle), 1.5 + u_bass * 0.5, 2.5 * cos(angle));
+    vec3 ta = vec3(0.0);
+    vec3 fwd = normalize(ta - ro);
+    vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    vec3 up = cross(right, fwd);
+    vec3 rd = normalize(fwd * 1.8 + right * uv.x + up * uv.y);
+    float t = 0.0;
+    float ao = 0.0;
+    vec3 col = vec3(0.02, 0.01, 0.04);
+    for (int i = 0; i < 128; i++) {
+        vec3 p = ro + rd * t;
+        float d = mengerScene(p);
+        if (d < 0.001) {
+            vec3 n = getNormalM(p);
+            vec3 light = normalize(vec3(0.8, 1.5, -0.6));
+            float diff = max(dot(n, light), 0.0);
+            float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 48.0);
+            float fresnel = pow(1.0 - max(dot(n, -rd), 0.0), 3.0);
+            col = palette(length(p) * 0.2 + iTime * 0.05 + u_spectralCentroid,
+                vec3(0.5), vec3(0.5), vec3(0.9, 0.6, 1.0), vec3(0.1, 0.2, 0.3));
+            col *= diff * 0.6 + 0.4;
+            col += spec * vec3(0.8, 0.7, 1.0) * u_treble;
+            col += fresnel * vec3(0.2, 0.1, 0.4) * u_highMid;
+            col *= 1.0 - ao * 0.4;
+            break;
+        }
+        ao += 0.02;
+        t += d;
+        if (t > 30.0) break;
+    }
+    col += vec3(0.25, 0.15, 0.35) * smoothstep(0.0, 1.0, u_beat) * 0.6;
+    col *= 1.0 - 0.35 * length(uv);
+    col = pow(col, vec3(0.9));
+    fragColor = vec4(col, 1.0);
+}
+
 ## RULES
 
-1. Use float literals with decimals: 1.0, 0.5, 3.14159
+1. Use float literals with decimals: 1.0, 0.5, 3.14159 (NEVER bare integers \
+   in vec/mat constructors — vec3(1, 0, 0) is INVALID, use vec3(1.0, 0.0, 0.0))
 2. Define helper functions ABOVE where they are called
 3. Every statement ends with a semicolon
 4. for-loop bounds must be compile-time constants
 5. float functions return float, vec3 functions return vec3
+6. Use mod(a, b) for float modulo — NEVER use the % operator on floats
+7. Do NOT limit yourself to simple effects. Use 100+ line shaders with \
+   multiple techniques if the concept calls for it.
 
 ## NVIDIA COMPATIBILITY — CRITICAL
 
@@ -346,13 +519,20 @@ but CRASH on NVIDIA. NEVER use them:
   functions just write `return;`
 - NEVER name a function `hash` — it collides with an NVIDIA \
   built-in. Use `hashFn` or `hash21` or `hash13` instead.
+- NEVER name a function `noise` — it collides on some NVIDIA \
+  drivers. Use `noiseFn` or `noiseVal` instead.
 - NEVER pass `void` as an argument: `foo(void)` is only valid \
   in declarations, not calls.
+- NEVER use bare integer literals in vec/mat constructors: \
+  `vec3(1, 2, 3)` FAILS — must be `vec3(1.0, 2.0, 3.0)`.
+- NEVER use `%` on float values — use `mod(a, b)` instead.
+- NEVER use `#define` for function-like macros with complex \
+  expressions — inline them as functions instead.
 
 ## OUTPUT
 
 Output ONLY valid GLSL code. No markdown fences, no backticks, \
-no explanation. Helper functions first, then mainImage.\
+no explanation. Helper functions first, then mainImage. Be ambitious.\
 """
 
 
@@ -491,17 +671,95 @@ def _strip_void_expressions(code: str) -> str:
 def _rename_nvidia_reserved(code: str) -> str:
     """Rename user-defined functions that collide with NVIDIA built-ins.
 
-    NVIDIA's GLSL compiler exposes ``hash`` as a built-in in some
-    extension contexts, causing 'no matching overloaded function
-    found' when user code defines ``float hash(vec2 p)``.  We
-    rename all occurrences to ``hashFn`` to avoid the collision.
+    NVIDIA's GLSL compiler exposes ``hash``, ``noise``, ``input``,
+    ``output`` in some extension contexts, causing 'no matching
+    overloaded function found' or redefinition errors. We rename
+    all occurrences to safe alternatives.
     """
-    # Only rename if the user actually defines hash as a function
-    if not _re.search(r"\b(?:float|vec[234]|int)\s+hash\s*\(", code):
-        return code
-    # Rename the definition + all call sites
-    code = _re.sub(r"\bhash\b", "hashFn", code)
+    # Map of reserved names → safe replacements
+    _RESERVED_MAP = {
+        "hash": "hashFn",
+        "noise": "noiseFn",
+        "input": "inputVal",
+        "output": "outputVal",
+    }
+    for reserved, replacement in _RESERVED_MAP.items():
+        # Only rename if the user actually defines it as a function
+        if _re.search(
+            rf"\b(?:float|vec[234]|int|void|mat[234])\s+{reserved}\s*\(",
+            code,
+        ):
+            code = _re.sub(rf"\b{reserved}\b", replacement, code)
     return code
+
+
+def _fix_int_literals_in_constructors(code: str) -> str:
+    """Fix bare integer literals in vec/mat constructors for NVIDIA.
+
+    NVIDIA rejects ``vec3(1, 0, 0)`` — requires ``vec3(1.0, 0.0, 0.0)``.
+    Mesa/Intel accept both. This converts integer literals inside
+    vec/mat constructors to float literals.
+    """
+    def _fix_args(match: _re.Match) -> str:
+        prefix = match.group(1)  # e.g. "vec3("
+        args = match.group(2)
+        suffix = match.group(3)  # ")"
+
+        # Process each token — convert bare integers to floats
+        def _int_to_float(arg_match: _re.Match) -> str:
+            token = arg_match.group(0)
+            # Don't convert if it's already a float or part of one
+            return token + ".0"
+
+        # Match standalone integer literals (not part of identifiers or floats)
+        fixed_args = _re.sub(
+            r"(?<![.\w])(-?\d+)(?![\w.])",
+            _int_to_float,
+            args,
+        )
+        return prefix + fixed_args + suffix
+
+    # Match vec2/3/4 and mat2/3/4 constructors
+    code = _re.sub(
+        r"(\b(?:vec[234]|mat[234])\s*\()([^)]+)(\))",
+        _fix_args,
+        code,
+    )
+    return code
+
+
+def _fix_modulo_on_floats(code: str) -> str:
+    """Replace ``%`` operator with ``mod()`` in float contexts.
+
+    NVIDIA rejects ``%`` for float operands; only ``mod()`` is valid.
+    We leave integer ``%`` alone (inside int/ivec declarations or
+    for-loop bodies with obvious int variables).
+    """
+    lines = code.split("\n")
+    fixed: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        # Skip comments
+        if stripped.startswith("//"):
+            fixed.append(line)
+            continue
+        # Skip lines that are clearly int context
+        if _re.match(r"^\s*(?:int|ivec|uint|uvec)\s", stripped):
+            fixed.append(line)
+            continue
+        # Skip for-loop headers with int iterators
+        if _re.match(r"^\s*for\s*\(\s*int\s", stripped):
+            fixed.append(line)
+            continue
+        # Replace  `expr % expr` with `mod(expr, expr)`
+        # This is a conservative regex: matches `a % b` patterns
+        line = _re.sub(
+            r"(\b[\w.]+(?:\([^)]*\))?)\s*%\s*([\w.]+(?:\([^)]*\))?)",
+            r"mod(\1, \2)",
+            line,
+        )
+        fixed.append(line)
+    return "\n".join(fixed)
 
 
 def _fix_missing_semicolons(code: str) -> str:
@@ -546,7 +804,9 @@ def sanitize_shader_code(raw: str) -> str:
     - Duplicate uniform / out / #version / precision declarations
     - Wrapper void main() that the host already provides
     - ALL void-as-expression patterns (NVIDIA compat)
-    - NVIDIA reserved name collisions (``hash`` → ``hashFn``)
+    - NVIDIA reserved name collisions (``hash`` → ``hashFn``, etc.)
+    - Integer literals in vec/mat constructors (NVIDIA compat)
+    - Float modulo ``%`` → ``mod()`` (NVIDIA compat)
     - Double braces ``{{`` / ``}}``
     - Missing semicolons before function declarations
     - Stray backslash line continuations
@@ -578,8 +838,16 @@ def sanitize_shader_code(raw: str) -> str:
     code = _strip_void_expressions(code)
 
     # ── Rename NVIDIA reserved names ─────────────────────────
-    # NVIDIA exposes `hash` as a built-in; user defs collide.
+    # NVIDIA exposes `hash`, `noise`, etc. as built-ins.
     code = _rename_nvidia_reserved(code)
+
+    # ── Fix integer literals in vec/mat constructors ─────────
+    # NVIDIA rejects vec3(1, 0, 0) — needs vec3(1.0, 0.0, 0.0)
+    code = _fix_int_literals_in_constructors(code)
+
+    # ── Fix float modulo operator ────────────────────────────
+    # NVIDIA rejects `%` on floats — must use mod()
+    code = _fix_modulo_on_floats(code)
 
     # ── Fix double braces {{ → { and }} → } ─────────────────
     code = _RE_DOUBLE_BRACE_OPEN.sub("{", code)
@@ -931,23 +1199,34 @@ End with 1-2 follow-up questions to refine the concept."""
                 f"{', '.join(color_palette)}"
             )
         prompt = (
-            "Create a visually stunning, music-reactive GLSL "
+            "Create a visually STUNNING, complex, music-reactive GLSL "
             "fragment shader.\n\n"
             f"Visual concept: {description}\n"
             f"Mood: {mood_str}{color_hint}\n\n"
-            "Use advanced techniques appropriate to the "
-            "concept — raymarching, SDFs, fractals, fbm "
-            "noise, domain warping, Voronoi, particle "
-            "fields, polar transforms, flow fields, "
-            "whatever best serves the visual. Use hundreds "
-            "or thousands of points/iterations if it "
-            "makes the image more beautiful.\n\n"
-            "Every audio uniform should drive some visual "
-            "parameter. Make it breathtaking.\n\n"
-            "CRITICAL: Do NOT use void() as a constructor "
-            "or expression. Do NOT name any function 'hash' "
-            "(use 'hashFn' instead). Do NOT write "
-            "'return void;'.\n\n"
+            "IMPORTANT: Do NOT create a simple or minimal shader. "
+            "Create something worthy of the Shadertoy front page. "
+            "Use advanced techniques appropriate to the concept:\n"
+            "- Raymarching with 100+ steps for detailed scenes\n"
+            "- SDFs with smooth boolean operations for organic forms\n"
+            "- Domain repetition for infinite grids (1000s of objects)\n"
+            "- Fractal formulae (Mandelbulb, IFS, Menger sponge)\n"
+            "- Multi-octave fbm noise with domain warping chains\n"
+            "- Voronoi patterns for cellular/crystal effects\n"
+            "- Sophisticated lighting (diffuse + specular + AO + Fresnel)\n"
+            "- Cinematic camera orbits with smooth noise\n"
+            "- Volumetric glow and fog for depth atmosphere\n"
+            "Combine multiple techniques. Use 80-200 lines.\n\n"
+            "EVERY audio uniform must drive a visible parameter. "
+            "u_bass → macro deformation, u_mid → pattern/color, "
+            "u_treble → fine detail, u_beat → flash/impact, "
+            "u_energy → brightness, u_spectralCentroid → warm/cool.\n"
+            "Make the audio reactivity AGGRESSIVE and obvious.\n\n"
+            "NVIDIA RULES (CRITICAL):\n"
+            "- Use float literals: 1.0 not 1 in vec/mat constructors\n"
+            "- Name hash functions 'hashFn', noise functions 'noiseFn'\n"
+            "- Never use void() as constructor/expression\n"
+            "- Never write 'return void;'\n"
+            "- Use mod(a, b) not % for floats\n\n"
             "Output ONLY GLSL code."
         )
         return await self._call_shader_llm(prompt, temperature=0.85)
@@ -1058,16 +1337,21 @@ End with 1-2 follow-up questions to refine the concept."""
             f"{line_hint}\n"
             f"{specific_advice}"
             f"Broken shader:\n{previous_code}\n\n"
-            "Fix ONLY the compilation error(s). Preserve "
-            "all the visual quality, effects, and audio "
-            "reactivity of the original shader.\n\n"
+            "Fix ONLY the compilation error(s). Do NOT "
+            "simplify, remove features, reduce complexity, "
+            "or dumb down the shader. Preserve ALL the "
+            "visual quality, effects, audio reactivity, "
+            "and artistic complexity of the original.\n\n"
             "REMEMBER: The wrapper provides #version 330, "
             "all uniforms, out vec4 fragColor, and void "
             "main(). Do NOT redeclare those.\n\n"
-            "NVIDIA RULES: Never use void() as constructor/"
-            "expression. Never write 'return void;'. Never "
-            "name a function 'hash' (use 'hashFn'). These "
-            "all crash on NVIDIA GPUs.\n\n"
+            "NVIDIA COMPATIBILITY RULES:\n"
+            "- Never use void() as constructor/expression\n"
+            "- Never write 'return void;' — use 'return;'\n"
+            "- Name hash functions 'hashFn', noise 'noiseFn'\n"
+            "- Use float literals: 1.0 not 1 in constructors\n"
+            "- Use mod(a, b) not % for float operands\n"
+            "- Define functions ABOVE their first use\n\n"
             "Output ONLY the complete corrected GLSL code. "
             "No markdown fences, no explanation."
         )
@@ -1078,27 +1362,38 @@ End with 1-2 follow-up questions to refine the concept."""
         description: str,
         mood_tags: list[str] | None = None,
     ) -> str | None:
-        """Generate a fresh shader with emphasis on compilability.
+        """Generate a fresh shader after previous attempts failed.
 
-        Still aims for visual beauty — uses the full description and
-        mood — but steers toward techniques less prone to syntax errors.
+        Still aims for visual beauty and complexity — uses the full
+        description and mood. Emphasizes NVIDIA-safe patterns by
+        referencing the examples from the system prompt more directly.
         """
         mood_str = (
             ", ".join(mood_tags) if mood_tags else "energetic, dynamic"
         )
         prompt = (
-            f"Create a stunning audio-reactive GLSL shader.\n\n"
+            "A previous shader attempt failed to compile. Generate "
+            "a FRESH, visually impressive audio-reactive GLSL shader "
+            "from scratch. Do NOT simplify — be ambitious.\n\n"
             f"Visual concept: {description}\n"
             f"Mood: {mood_str}\n\n"
-            "Use visually impressive techniques: domain "
-            "warping, fbm noise, iq palette, polar distortion, "
-            "Voronoi, layered sin patterns, flow fields, "
-            "tunnel effects. Keep under 80 lines.\n\n"
-            "Every audio uniform should drive a visual "
-            "parameter. Make it look gorgeous.\n\n"
-            "CRITICAL: Do NOT use void() as a constructor. "
-            "Do NOT name any function 'hash' (use 'hashFn'). "
-            "Do NOT write 'return void;'.\n\n"
-            "Output ONLY GLSL code. No markdown."
+            "Use a DIFFERENT approach than typical simple shaders. "
+            "Choose from these proven-to-compile techniques:\n"
+            "- Raymarching with SDFs (like Example 1 or 3 in system prompt)\n"
+            "- IFS fractals (like Example 4 in system prompt)\n"
+            "- Multi-layered fbm with domain warping (like Example 2)\n"
+            "- Domain repetition for infinite geometry grids\n"
+            "- Voronoi + kaleidoscope combinations\n"
+            "- Tunnel effects with complex texturing\n\n"
+            "EVERY audio uniform must visibly affect the output. "
+            "Make the audio reactivity dramatic.\n\n"
+            "NVIDIA COMPATIBILITY IS MANDATORY:\n"
+            "- ALL float literals must have decimals: 1.0 not 1\n"
+            "- Name hash functions 'hashFn', noise functions 'noiseFn'\n"
+            "- NEVER use void() as expression/constructor\n"
+            "- NEVER write 'return void;' — use 'return;'\n"
+            "- Use mod(a, b) not % for float modulo\n"
+            "- Define all helper functions ABOVE their first use\n\n"
+            "Output ONLY GLSL code. No markdown fences. No explanation."
         )
-        return await self._call_shader_llm(prompt, temperature=0.6)
+        return await self._call_shader_llm(prompt, temperature=0.7)

@@ -26,6 +26,21 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # Retry broker connection on startup so the worker doesn't crash
+    # if Redis is briefly unavailable or still spinning up.
+    broker_connection_retry_on_startup=True,
+    broker_connection_retry=True,
+    broker_connection_max_retries=10,
+    broker_connection_timeout=30,
+    # Redis-specific: keepalive and socket timeouts to detect stale
+    # connections before the OS does (prevents silent hangs).
+    broker_transport_options={
+        "socket_keepalive": True,
+        "socket_keepalive_options": {},
+        "socket_connect_timeout": 30,
+        "retry_on_timeout": True,
+        "health_check_interval": 30,
+    },
 )
 
 # On Windows, billiard's prefork pool has known issues with shutdown

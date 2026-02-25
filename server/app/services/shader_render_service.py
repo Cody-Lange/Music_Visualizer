@@ -141,18 +141,18 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 """
 
 _FALLBACK_WAVES = """\
-float hash(vec2 p) {
+float hashFn(vec2 p) {
     return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
 }
 
-float noise(vec2 p) {
+float noiseFn(vec2 p) {
     vec2 i = floor(p);
     vec2 f = fract(p);
     f = f * f * (3.0 - 2.0 * f);
-    float a = hash(i);
-    float b = hash(i + vec2(1.0, 0.0));
-    float c = hash(i + vec2(0.0, 1.0));
-    float d = hash(i + vec2(1.0, 1.0));
+    float a = hashFn(i);
+    float b = hashFn(i + vec2(1.0, 0.0));
+    float c = hashFn(i + vec2(0.0, 1.0));
+    float d = hashFn(i + vec2(1.0, 1.0));
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
 }
 
@@ -160,7 +160,7 @@ float fbm(vec2 p) {
     float v = 0.0;
     float a = 0.5;
     for (int i = 0; i < 5; i++) {
-        v += a * noise(p);
+        v += a * noiseFn(p);
         p *= 2.0;
         a *= 0.5;
     }
@@ -246,15 +246,155 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
 }
 """
 
+_FALLBACK_FRACTAL = """\
+float sdBox(vec3 p, vec3 b) {
+    vec3 d = abs(p) - b;
+    return min(max(d.x, max(d.y, d.z)), 0.0) + length(max(d, 0.0));
+}
+
+float mengerScene(vec3 p) {
+    float d = sdBox(p, vec3(1.0));
+    float s = 1.0;
+    for (int m = 0; m < 4; m++) {
+        vec3 a = mod(p * s, 2.0) - 1.0;
+        s *= 3.0;
+        vec3 r = abs(1.0 - 3.0 * abs(a));
+        float da = max(r.x, r.y);
+        float db = max(r.y, r.z);
+        float dc = max(r.z, r.x);
+        float c = (min(da, min(db, dc)) - 1.0) / s;
+        d = max(d, c);
+    }
+    return d;
+}
+
+vec3 getNormalM(vec3 p) {
+    vec2 e = vec2(0.0005, 0.0);
+    return normalize(vec3(
+        mengerScene(p + e.xyy) - mengerScene(p - e.xyy),
+        mengerScene(p + e.yxy) - mengerScene(p - e.yxy),
+        mengerScene(p + e.yyx) - mengerScene(p - e.yyx)));
+}
+
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+    float angle = iTime * 0.15 + u_mid * 0.5;
+    vec3 ro = vec3(2.5 * sin(angle), 1.5 + u_bass * 0.4, 2.5 * cos(angle));
+    vec3 ta = vec3(0.0);
+    vec3 fwd = normalize(ta - ro);
+    vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    vec3 up = cross(right, fwd);
+    vec3 rd = normalize(fwd * 1.8 + right * uv.x + up * uv.y);
+    float t = 0.0;
+    vec3 col = vec3(0.02, 0.01, 0.04);
+    for (int i = 0; i < 100; i++) {
+        vec3 p = ro + rd * t;
+        float d = mengerScene(p);
+        if (d < 0.001) {
+            vec3 n = getNormalM(p);
+            vec3 light = normalize(vec3(0.8, 1.5, -0.6));
+            float diff = max(dot(n, light), 0.0);
+            float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 48.0);
+            col = palette(length(p) * 0.2 + iTime * 0.05 + u_spectralCentroid,
+                vec3(0.5), vec3(0.5), vec3(0.9, 0.6, 1.0), vec3(0.1, 0.2, 0.3));
+            col *= diff * 0.6 + 0.4;
+            col += spec * vec3(0.8, 0.7, 1.0) * u_treble;
+            break;
+        }
+        t += d;
+        if (t > 25.0) break;
+    }
+    col += vec3(0.2, 0.1, 0.3) * smoothstep(0.0, 1.0, u_beat) * 0.6;
+    col *= 1.0 - 0.3 * length(uv);
+    fragColor = vec4(col, 1.0);
+}
+"""
+
+_FALLBACK_GRID = """\
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+float hashFn(float n) {
+    return fract(sin(n) * 43758.5453123);
+}
+
+float sdSphere(vec3 p, float r) {
+    return length(p) - r;
+}
+
+float gridScene(vec3 p) {
+    vec3 rep = vec3(3.0 + u_lowMid * 0.5);
+    vec3 q = mod(p + rep * 0.5, rep) - rep * 0.5;
+    float id = hashFn(dot(floor((p + rep * 0.5) / rep), vec3(1.0, 57.0, 113.0)));
+    float r = (0.3 + u_bass * 0.2) * (0.5 + 0.5 * id);
+    return sdSphere(q, r);
+}
+
+vec3 getGridNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(
+        gridScene(p + e.xyy) - gridScene(p - e.xyy),
+        gridScene(p + e.yxy) - gridScene(p - e.yxy),
+        gridScene(p + e.yyx) - gridScene(p - e.yyx)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+    float camT = iTime * 0.3;
+    vec3 ro = vec3(sin(camT) * 5.0, 2.0, cos(camT) * 5.0);
+    vec3 ta = vec3(0.0);
+    vec3 fwd = normalize(ta - ro);
+    vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    vec3 up = cross(right, fwd);
+    vec3 rd = normalize(fwd * 2.0 + right * uv.x + up * uv.y);
+    float t = 0.0;
+    vec3 col = vec3(0.01, 0.01, 0.03);
+    for (int i = 0; i < 100; i++) {
+        vec3 p = ro + rd * t;
+        float d = gridScene(p);
+        if (d < 0.002) {
+            vec3 n = getGridNormal(p);
+            vec3 light = normalize(vec3(1.0, 2.0, -0.5));
+            float diff = max(dot(n, light), 0.0);
+            float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 64.0);
+            float idVal = hashFn(dot(floor((p + 1.5) / 3.0), vec3(1.0, 57.0, 113.0)));
+            col = palette(idVal + iTime * 0.1 + u_spectralCentroid,
+                vec3(0.5), vec3(0.5), vec3(1.0, 0.8, 0.5), vec3(0.0, 0.1, 0.2));
+            col *= diff * 0.7 + 0.3;
+            col += spec * u_treble * 1.5;
+            break;
+        }
+        float glow = 0.004 / (abs(d) + 0.05) * u_energy;
+        col += vec3(glow * 0.2, glow * 0.05, glow * 0.3) * 0.3;
+        t += d;
+        if (t > 35.0) break;
+    }
+    col += vec3(0.25, 0.15, 0.35) * smoothstep(0.0, 1.0, u_beat) * 0.5;
+    col *= 1.0 - 0.3 * length(uv);
+    fragColor = vec4(col, 1.0);
+}
+"""
+
 # Ordered list: (keywords, shader_code)
 _FALLBACK_LIBRARY: list[tuple[list[str], str]] = [
     (["sphere", "3d", "ray", "orb", "planet", "ball"],
      _FALLBACK_SPHERE),
     (["tunnel", "warp", "speed", "hyper", "vortex", "portal"],
      _FALLBACK_TUNNEL),
-    (["kaleidoscope", "geometric", "crystal", "mirror", "fractal",
+    (["kaleidoscope", "geometric", "crystal", "mirror",
       "symmetry", "mandala"],
      _FALLBACK_KALEIDOSCOPE),
+    (["fractal", "menger", "sierpinski", "infinite", "recursive",
+      "abstract", "mathematical"],
+     _FALLBACK_FRACTAL),
+    (["grid", "particle", "galaxy", "star", "space", "cosmos",
+      "constellation", "nebula", "field"],
+     _FALLBACK_GRID),
     (["ocean", "wave", "water", "flow", "fluid", "organic", "nature"],
      _FALLBACK_WAVES),
     ([], _FALLBACK_PLASMA),  # default
@@ -340,25 +480,41 @@ class ShaderRenderService:
         import re as _re
 
         lines = shader_code.split("\n")
+        in_block_comment = False
+
         for i, line in enumerate(lines, 1):
             stripped = line.strip()
 
-            # Skip comments
+            # Track block comments
+            if "/*" in stripped:
+                in_block_comment = True
+            if "*/" in stripped:
+                in_block_comment = False
+                continue
+            if in_block_comment:
+                continue
+
+            # Skip single-line comments
             if stripped.startswith("//"):
+                continue
+
+            # Strip inline comments for analysis
+            code_part = stripped.split("//")[0].rstrip()
+            if not code_part:
                 continue
 
             # ── void(...) as expression (not a declaration) ──────
             # Valid declaration: `void funcName(...)`
             # Invalid expression: `void(...)` or `void();`
-            if _re.search(r"\bvoid\s*\(", stripped):
-                if not _re.match(r"^void\s+\w+\s*\(", stripped):
+            if _re.search(r"\bvoid\s*\(", code_part):
+                if not _re.match(r"^void\s+\w+\s*\(", code_part):
                     return (
                         f"NVIDIA compat: line {i}: "
                         f"void() expression is invalid — {stripped}"
                     )
 
             # ── return void ─────────────────────────────────────
-            if _re.search(r"\breturn\s+void\b", stripped):
+            if _re.search(r"\breturn\s+void\b", code_part):
                 return (
                     f"NVIDIA compat: line {i}: "
                     f"return void is invalid — {stripped}"
@@ -367,18 +523,47 @@ class ShaderRenderService:
             # ── func(void) in a call ────────────────────────────
             # Valid declaration: `float foo(void) {`
             # Invalid call: `x = foo(void);`
-            if _re.search(r"\w+\s*\(\s*void\s*\)", stripped):
+            if _re.search(r"\w+\s*\(\s*void\s*\)", code_part):
                 # Check if it's a declaration (has a type before the name)
                 if not _re.match(
                     r"^(?:void|float|int|vec[234]|mat[234]|bool|"
-                    r"ivec[234])\s+\w+\s*\(\s*void\s*\)",
-                    stripped,
+                    r"ivec[234]|uvec[234]|sampler\w+)\s+\w+\s*\(\s*void\s*\)",
+                    code_part,
                 ):
                     return (
                         f"NVIDIA compat: line {i}: "
                         f"func(void) call syntax is invalid "
                         f"— {stripped}"
                     )
+
+            # ── Modulo on floats using % instead of mod() ────────
+            # NVIDIA rejects `float_expr % float_expr`; must use mod()
+            if _re.search(r"[a-zA-Z_]\w*\s*%\s*[a-zA-Z0-9_.]", code_part):
+                # Only flag if it looks like float context (not int loop vars)
+                if not _re.match(r"^\s*(?:int|ivec|uint|uvec)", code_part):
+                    return (
+                        f"NVIDIA compat: line {i}: "
+                        f"use mod() instead of % for float types — {stripped}"
+                    )
+
+            # ── Implicit int-to-float in vec/mat constructors ────
+            # NVIDIA rejects vec3(1, 0, 0); must be vec3(1.0, 0.0, 0.0)
+            m_vec = _re.finditer(
+                r"\b(vec[234]|mat[234])\s*\(([^)]+)\)", code_part,
+            )
+            for mv in m_vec:
+                args = mv.group(2)
+                # Check for bare integer literals (not part of a float)
+                tokens = [t.strip() for t in args.split(",")]
+                for tok in tokens:
+                    tok = tok.strip()
+                    # Pure integer literal (not 0.0, not a variable)
+                    if _re.match(r"^-?\d+$", tok) and tok not in ("0", "1"):
+                        return (
+                            f"NVIDIA compat: line {i}: "
+                            f"use float literals (e.g. {tok}.0) in "
+                            f"{mv.group(1)} constructor — {stripped}"
+                        )
 
         # ── Reserved function names on NVIDIA ────────────────
         if _re.search(
@@ -388,6 +573,18 @@ class ShaderRenderService:
                 "NVIDIA compat: function 'hash' collides with "
                 "NVIDIA built-in — rename to 'hashFn'"
             )
+
+        # ── Other NVIDIA reserved names ──────────────────────
+        nvidia_reserved = ["noise", "input", "output"]
+        for name in nvidia_reserved:
+            if _re.search(
+                rf"\b(?:float|vec[234]|int|void)\s+{name}\s*\(",
+                shader_code,
+            ):
+                return (
+                    f"NVIDIA compat: function '{name}' collides with "
+                    f"NVIDIA built-in/keyword — rename to '{name}Fn'"
+                )
 
         return None
 
