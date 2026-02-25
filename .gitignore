@@ -14,6 +14,7 @@ venv/
 client/dist/
 server/data/
 *.egg-info/
+.vite/
 
 # IDE
 .vscode/
