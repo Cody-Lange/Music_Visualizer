@@ -1,5 +1,7 @@
 import json
 import logging
+import re
+from typing import Literal
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
@@ -9,6 +11,31 @@ from app.services.storage import job_store
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+ChatPhase = Literal["analysis", "refinement", "confirmation", "rendering", "editing"]
+
+# Patterns that suggest the user wants to render
+_CONFIRM_PATTERNS = re.compile(
+    r"\b("
+    r"yes\s*(,?\s*render|,?\s*go|,?\s*do\s*it|,?\s*please|,?\s*let'?s)|"
+    r"render\s*(it|now|the\s*video|this)|"
+    r"make\s*the\s*video|"
+    r"start\s*render|"
+    r"let'?s\s*(go|do\s*it|render|make)|"
+    r"looks?\s*(good|great|perfect),?\s*(render|go|let'?s)|"
+    r"ready\s*to\s*render|"
+    r"go\s*ahead|"
+    r"do\s*it"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Patterns the LLM uses to ask for render confirmation
+_LLM_ASKS_CONFIRM = re.compile(
+    r"(ready\s+to\s+render\??|shall\s+(i|we)\s+(start|begin)\s+render|"
+    r"proceed\s+with\s+render|confirm\s+to\s+render|want\s+me\s+to\s+render)",
+    re.IGNORECASE,
+)
 
 
 def _build_analysis_context(job_id: str) -> str:
@@ -56,6 +83,58 @@ def _build_analysis_context(job_id: str) -> str:
     return "\n".join(parts)
 
 
+def _detect_phase_transition(
+    phase: ChatPhase,
+    user_content: str,
+    assistant_response: str,
+    turn_count: int,
+) -> ChatPhase:
+    """Determine if the conversation should move to a new phase."""
+    if phase == "analysis":
+        # After the initial analysis response, move to refinement
+        return "refinement"
+
+    if phase == "refinement":
+        # Check if the LLM is asking for render confirmation
+        if _LLM_ASKS_CONFIRM.search(assistant_response):
+            return "confirmation"
+        # Check if the user is directly asking to render
+        if _CONFIRM_PATTERNS.search(user_content):
+            return "confirmation"
+        return "refinement"
+
+    if phase == "confirmation":
+        # User confirmed — check if user says yes to render
+        if _CONFIRM_PATTERNS.search(user_content):
+            return "rendering"
+        # User wants more changes — back to refinement
+        return "refinement"
+
+    # rendering and editing phases stay as-is until explicitly changed
+    return phase
+
+
+def _try_extract_render_spec(text: str) -> dict | None:
+    """Try to extract a JSON render spec from an LLM response."""
+    # Look for ```json ... ``` blocks
+    match = re.search(r"```(?:json)?\s*\n(.*?)\n\s*```", text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            pass
+
+    # Try the entire text as JSON
+    stripped = text.strip()
+    if stripped.startswith("{"):
+        try:
+            return json.loads(stripped)
+        except json.JSONDecodeError:
+            pass
+
+    return None
+
+
 @router.websocket("/chat/{session_id}")
 async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
     """WebSocket endpoint for LLM conversation streaming."""
@@ -64,6 +143,8 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
     llm = LLMService()
     conversation_history: list[ChatMessage] = []
     job_id: str | None = None
+    phase: ChatPhase = "analysis"
+    turn_count = 0
 
     try:
         while True:
@@ -87,9 +168,16 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                 continue
 
             conversation_history.append(ChatMessage(role="user", content=user_content))
+            turn_count += 1
 
             # Build context from analysis data
             context = _build_analysis_context(job_id) if job_id else ""
+
+            # Send current phase info
+            await websocket.send_text(json.dumps({
+                "type": "phase",
+                "phase": phase,
+            }))
 
             # Stream LLM response
             await websocket.send_text(json.dumps({
@@ -110,6 +198,47 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                 "type": "stream_end",
                 "content": full_response,
             }))
+
+            # Detect phase transitions
+            new_phase = _detect_phase_transition(phase, user_content, full_response, turn_count)
+            if new_phase != phase:
+                phase = new_phase
+                await websocket.send_text(json.dumps({
+                    "type": "phase",
+                    "phase": phase,
+                }))
+
+            # If we've moved to rendering phase, extract the render spec
+            if phase == "rendering":
+                # First check if the LLM already output JSON in its response
+                render_spec = _try_extract_render_spec(full_response)
+
+                if not render_spec:
+                    # Ask the LLM to produce a structured render spec
+                    await websocket.send_text(json.dumps({
+                        "type": "system",
+                        "content": "Generating render specification...",
+                    }))
+                    render_spec = await llm.extract_render_spec(
+                        conversation_history, context
+                    )
+
+                if render_spec:
+                    # Store the render spec on the job
+                    if job_id:
+                        job_store.update_job(job_id, {"render_spec": render_spec})
+
+                    await websocket.send_text(json.dumps({
+                        "type": "render_spec",
+                        "render_spec": render_spec,
+                    }))
+                else:
+                    # Fallback: ask user to try again
+                    phase = "confirmation"
+                    await websocket.send_text(json.dumps({
+                        "type": "system",
+                        "content": "I had trouble generating the render spec. Could you confirm once more that you'd like to render?",
+                    }))
 
     except WebSocketDisconnect:
         logger.info("Chat WebSocket disconnected: session=%s", session_id)

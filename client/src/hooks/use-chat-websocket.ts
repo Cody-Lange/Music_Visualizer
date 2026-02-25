@@ -11,6 +11,8 @@ export function useChatWebSocket() {
   const addMessage = useChatStore((s) => s.addMessage);
   const updateLastAssistantMessage = useChatStore((s) => s.updateLastAssistantMessage);
   const setIsStreaming = useChatStore((s) => s.setIsStreaming);
+  const setPhase = useChatStore((s) => s.setPhase);
+  const setRenderSpec = useChatStore((s) => s.setRenderSpec);
   const jobId = useAudioStore((s) => s.jobId);
 
   useEffect(() => {
@@ -46,6 +48,27 @@ export function useChatWebSocket() {
           if (message.content?.includes("bound to job")) {
             setIsConnected(true);
           }
+          // Display system messages in the chat
+          if (message.content && !message.content.includes("bound to job")) {
+            addMessage({
+              id: createMessageId(),
+              role: "system",
+              content: message.content,
+              timestamp: Date.now(),
+            });
+          }
+          break;
+
+        case "phase":
+          if (message.phase) {
+            setPhase(message.phase);
+          }
+          break;
+
+        case "render_spec":
+          if (message.render_spec) {
+            setRenderSpec(message.render_spec as any);
+          }
           break;
       }
     });
@@ -65,7 +88,7 @@ export function useChatWebSocket() {
       unsubscribe();
       ws.disconnect();
     };
-  }, [sessionId, jobId, addMessage, updateLastAssistantMessage, setIsStreaming]);
+  }, [sessionId, jobId, addMessage, updateLastAssistantMessage, setIsStreaming, setPhase, setRenderSpec]);
 
   const sendMessage = useCallback((content: string) => {
     wsRef.current?.sendChatMessage(content);

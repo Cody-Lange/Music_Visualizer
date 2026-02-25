@@ -1,7 +1,11 @@
 """LLM service using Google Gemini Flash for thematic analysis and chat."""
 
+import json
 import logging
 from collections.abc import AsyncGenerator
+
+from google import genai
+from google.genai import types
 
 from app.config import settings
 from app.models.chat import ChatMessage
@@ -32,25 +36,131 @@ When providing a section-by-section breakdown, use this format for each section:
 - Visuals: ...
 - Motion: ...
 - AI Keyframe Prompt: "..."
+
+## Conversation Phases
+
+You operate in distinct phases. Your behavior adapts based on the current phase:
+
+### Phase: ANALYSIS
+When you receive audio analysis data and a user prompt for the first time, provide:
+1. **Track Overview** — Genre, mood, emotional arc, narrative summary
+2. **Thematic Analysis** — Core themes, symbolism, metaphors, pop culture references
+3. **Section-by-Section Visualization** — For each detected section, suggest colors (hex), motion style, imagery, and an AI keyframe prompt
+4. **Overall Visual Concept** — Recommended template style, consistent motifs, lyrics display approach
+
+End with 1-2 follow-up questions to refine the concept.
+
+### Phase: REFINEMENT
+Respond to user feedback with specific, modified suggestions. Keep track of all agreed-upon decisions. Reference specific timestamps and energy levels from the audio data.
+
+### Phase: CONFIRMATION
+Detect when the user is satisfied. Signs include:
+- "That's perfect", "Love it", "Let's go", "Looks good"
+- "Render it", "Make the video", "Start rendering"
+- Lack of further change requests after 2+ exchanges
+- User asking about export settings or timeline
+
+When you detect satisfaction, present a FINAL SUMMARY table of all agreed-upon decisions, then ask: "Ready to render?"
+
+When the user explicitly confirms they want to render, respond with ONLY a JSON render spec block wrapped in ```json fences. The JSON must conform to this schema:
+{
+  "globalStyle": {
+    "template": "<one of: nebula, geometric, waveform, cinematic, retro, nature, abstract, urban, glitchbreak, 90s-anime>",
+    "styleModifiers": ["<modifier>", ...],
+    "recurringMotifs": ["<motif>", ...],
+    "lyricsDisplay": {
+      "enabled": true/false,
+      "font": "<sans|serif|mono>",
+      "size": "<small|medium|large>",
+      "animation": "<fade-word|typewriter|karaoke|float-up|none>",
+      "color": "#hex",
+      "shadow": true/false
+    }
+  },
+  "sections": [
+    {
+      "label": "<section label>",
+      "startTime": <float>,
+      "endTime": <float>,
+      "colorPalette": ["#hex", ...],
+      "motionStyle": "<slow-drift|pulse|energetic|chaotic|breathing|glitch|smooth-flow|staccato>",
+      "intensity": <0.0-1.0>,
+      "aiPrompt": "<image generation prompt>",
+      "transitionIn": "<transition type>",
+      "transitionOut": "<transition type>",
+      "visualElements": ["<element>", ...]
+    }
+  ],
+  "exportSettings": {
+    "resolution": [1920, 1080],
+    "fps": 30,
+    "aspectRatio": "16:9",
+    "format": "mp4",
+    "quality": "high"
+  }
+}
+
+### Phase: EDITING (post-render)
+Interpret edit requests and suggest specific changes. Reference sections by name and timestamp.
 """
+
+RENDER_SPEC_EXTRACTION_PROMPT = """Based on the conversation so far, extract the final agreed-upon visualization plan as a JSON render spec. Output ONLY valid JSON (no markdown fences, no explanation) conforming to this schema:
+
+{
+  "globalStyle": {
+    "template": "<one of: nebula, geometric, waveform, cinematic, retro, nature, abstract, urban, glitchbreak, 90s-anime>",
+    "styleModifiers": ["<modifier>"],
+    "recurringMotifs": ["<motif>"],
+    "lyricsDisplay": {
+      "enabled": true,
+      "font": "sans",
+      "size": "medium",
+      "animation": "fade-word",
+      "color": "#F0F0F5",
+      "shadow": true
+    }
+  },
+  "sections": [
+    {
+      "label": "<section label>",
+      "startTime": 0.0,
+      "endTime": 10.0,
+      "colorPalette": ["#hex1", "#hex2"],
+      "motionStyle": "slow-drift",
+      "intensity": 0.5,
+      "aiPrompt": "<prompt for AI image generation>",
+      "transitionIn": "cross-dissolve",
+      "transitionOut": "cross-dissolve",
+      "visualElements": ["element"]
+    }
+  ],
+  "exportSettings": {
+    "resolution": [1920, 1080],
+    "fps": 30,
+    "aspectRatio": "16:9",
+    "format": "mp4",
+    "quality": "high"
+  }
+}
+
+Use the exact section boundaries from the audio analysis. Fill in all fields based on what was discussed."""
 
 
 class LLMService:
     """Gemini Flash integration for thematic analysis and conversational refinement."""
 
     def __init__(self) -> None:
-        self._model = None
+        self._client: genai.Client | None = None
 
-    def _get_model(self):  # type: ignore[no-untyped-def]
-        if self._model is None:
-            import google.generativeai as genai
-
-            genai.configure(api_key=settings.google_ai_api_key)
-            self._model = genai.GenerativeModel(
-                "gemini-2.0-flash",
-                system_instruction=SYSTEM_PROMPT,
-            )
-        return self._model
+    def _get_client(self) -> genai.Client:
+        if self._client is None:
+            api_key = settings.google_ai_api_key
+            if not api_key:
+                raise RuntimeError(
+                    "GOOGLE_AI_API_KEY is not set. Please set it in your .env file or environment."
+                )
+            self._client = genai.Client(api_key=api_key)
+        return self._client
 
     async def stream_chat(
         self,
@@ -58,47 +168,64 @@ class LLMService:
         audio_context: str = "",
     ) -> AsyncGenerator[str]:
         """Stream a chat response from Gemini Flash."""
-        model = self._get_model()
-
-        # Build the conversation history for Gemini
-        gemini_history: list[dict[str, str]] = []
-
-        # If we have audio context, prepend it as the first user message context
-        if audio_context and messages:
-            first_msg = messages[0]
-            augmented_content = f"{audio_context}\n\n---\n\nUser request: {first_msg.content}"
-            gemini_history.append({"role": "user", "parts": [augmented_content]})
-
-            # Add remaining messages
-            for msg in messages[1:]:
-                role = "user" if msg.role == "user" else "model"
-                gemini_history.append({"role": role, "parts": [msg.content]})
-        else:
-            for msg in messages:
-                role = "user" if msg.role == "user" else "model"
-                gemini_history.append({"role": role, "parts": [msg.content]})
-
-        # The last message is the new user input — remove it from history
-        # and use it as the send_message content
-        if not gemini_history:
+        if not messages:
             yield "I need a message to respond to. Please describe what you'd like for your visualization."
             return
 
-        last_message = gemini_history.pop()
-        chat = model.start_chat(history=gemini_history if gemini_history else [])
+        client = self._get_client()
+
+        # Build the conversation history as Content objects
+        history: list[types.Content] = []
+
+        if audio_context and messages:
+            first_msg = messages[0]
+            augmented_content = f"{audio_context}\n\n---\n\nUser request: {first_msg.content}"
+            history.append(
+                types.Content(
+                    role="user",
+                    parts=[types.Part.from_text(text=augmented_content)],
+                )
+            )
+            for msg in messages[1:]:
+                role = "user" if msg.role == "user" else "model"
+                history.append(
+                    types.Content(
+                        role=role,
+                        parts=[types.Part.from_text(text=msg.content)],
+                    )
+                )
+        else:
+            for msg in messages:
+                role = "user" if msg.role == "user" else "model"
+                history.append(
+                    types.Content(
+                        role=role,
+                        parts=[types.Part.from_text(text=msg.content)],
+                    )
+                )
+
+        # The last message is the new user input — remove from history for send_message
+        last_content = history.pop()
+
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.8,
+            top_p=0.95,
+            max_output_tokens=4096,
+        )
 
         try:
-            response = chat.send_message(
-                last_message["parts"],
-                stream=True,
-                generation_config={
-                    "temperature": 0.8,
-                    "top_p": 0.95,
-                    "max_output_tokens": 4096,
-                },
+            chat = client.aio.chats.create(
+                model="gemini-2.0-flash",
+                history=history if history else None,
+                config=config,
             )
 
-            for chunk in response:
+            response = chat.send_message_stream(
+                last_content.parts[0].text if last_content.parts else "",
+            )
+
+            async for chunk in response:
                 if chunk.text:
                     yield chunk.text
 
@@ -129,3 +256,76 @@ End with 1-2 follow-up questions to refine the concept."""
         messages = [ChatMessage(role="user", content=analysis_prompt)]
         async for chunk in self.stream_chat(messages, ""):
             yield chunk
+
+    async def extract_render_spec(
+        self,
+        messages: list[ChatMessage],
+        audio_context: str,
+    ) -> dict | None:
+        """Extract a structured render spec from the conversation.
+
+        Returns the parsed JSON dict or None if extraction fails.
+        """
+        client = self._get_client()
+
+        # Build history with audio context
+        history: list[types.Content] = []
+        if audio_context and messages:
+            first_msg = messages[0]
+            augmented = f"{audio_context}\n\n---\n\nUser request: {first_msg.content}"
+            history.append(
+                types.Content(role="user", parts=[types.Part.from_text(text=augmented)])
+            )
+            for msg in messages[1:]:
+                role = "user" if msg.role == "user" else "model"
+                history.append(
+                    types.Content(role=role, parts=[types.Part.from_text(text=msg.content)])
+                )
+        else:
+            for msg in messages:
+                role = "user" if msg.role == "user" else "model"
+                history.append(
+                    types.Content(role=role, parts=[types.Part.from_text(text=msg.content)])
+                )
+
+        # Add the extraction prompt as a final user message
+        history.append(
+            types.Content(
+                role="user",
+                parts=[types.Part.from_text(text=RENDER_SPEC_EXTRACTION_PROMPT)],
+            )
+        )
+        last_content = history.pop()
+
+        config = types.GenerateContentConfig(
+            system_instruction=SYSTEM_PROMPT,
+            temperature=0.2,
+            max_output_tokens=4096,
+        )
+
+        try:
+            chat = client.aio.chats.create(
+                model="gemini-2.0-flash",
+                history=history if history else None,
+                config=config,
+            )
+
+            response = await chat.send_message(
+                last_content.parts[0].text if last_content.parts else "",
+            )
+
+            raw = response.text.strip()
+            # Strip markdown fences if present
+            if raw.startswith("```"):
+                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+            if raw.endswith("```"):
+                raw = raw[: raw.rfind("```")]
+            raw = raw.strip()
+
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse render spec JSON from LLM response")
+            return None
+        except Exception:
+            logger.exception("Error extracting render spec")
+            return None

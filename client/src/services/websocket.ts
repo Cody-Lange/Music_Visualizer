@@ -9,12 +9,18 @@ export type WsMessageType =
   | "stream_chunk"
   | "stream_end"
   | "system"
-  | "error";
+  | "error"
+  | "phase"
+  | "render_spec";
+
+export type ChatPhase = "analysis" | "refinement" | "confirmation" | "rendering" | "editing";
 
 export interface WsMessage {
   type: WsMessageType;
   content?: string;
   job_id?: string;
+  phase?: ChatPhase;
+  render_spec?: Record<string, unknown>;
 }
 
 type MessageHandler = (message: WsMessage) => void;
