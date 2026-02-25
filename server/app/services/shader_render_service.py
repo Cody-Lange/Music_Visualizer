@@ -160,7 +160,7 @@ class ShaderRenderService:
         )
 
         # Extract audio feature timeseries from analysis
-        beat_times = analysis.get("beats", {}).get("times", [])
+        beat_times = analysis.get("rhythm", {}).get("beats", [])
         spectral = analysis.get("spectral", {})
         spec_times = spectral.get("times", [])
         rms_values = spectral.get("rms", [])

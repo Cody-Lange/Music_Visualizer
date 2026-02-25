@@ -5,7 +5,6 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import ValidationError
 
 from app.models.render import RenderEditRequest, RenderSpec
-from app.services.ai_image_service import AIImageService
 from app.services.render_service import RenderService
 from app.services.shader_render_service import ShaderRenderService
 from app.services.llm_service import LLMService
