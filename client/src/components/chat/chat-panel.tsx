@@ -7,31 +7,31 @@ import { ChatMessage } from "@/components/chat/chat-message";
 import { useChatWebSocket } from "@/hooks/use-chat-websocket";
 import type { ChatPhase } from "@/services/websocket";
 
-const PHASE_CONFIG: Record<ChatPhase, { label: string; description: string; icon: typeof Sparkles }> = {
+const PHASE_CONFIG: Record<ChatPhase, { label: string; icon: typeof Sparkles; color: string }> = {
   analysis: {
     label: "Analyzing",
-    description: "Generating thematic analysis and visualization suggestions...",
     icon: Sparkles,
+    color: "text-accent",
   },
   refinement: {
     label: "Refining",
-    description: "Discuss and refine the visualization plan",
     icon: MessageSquare,
+    color: "text-accent",
   },
   confirmation: {
     label: "Ready to Render",
-    description: "Confirm the plan to start rendering",
     icon: CheckCircle2,
+    color: "text-success",
   },
   rendering: {
     label: "Rendering",
-    description: "Render spec generated — preparing video",
     icon: Clapperboard,
+    color: "text-warning",
   },
   editing: {
     label: "Editing",
-    description: "Request changes to the rendered video",
     icon: MessageSquare,
+    color: "text-accent",
   },
 };
 
@@ -39,10 +39,9 @@ function PhaseIndicator({ phase }: { phase: ChatPhase }) {
   const config = PHASE_CONFIG[phase];
   const Icon = config.icon;
   return (
-    <div className="flex items-center gap-2">
-      <Icon size={14} className="text-accent" />
-      <span className="text-xs font-medium text-accent">{config.label}</span>
-      <span className="text-xs text-text-secondary">— {config.description}</span>
+    <div className={`inline-flex items-center gap-1.5 rounded-full bg-bg-tertiary px-2.5 py-1 ${config.color}`}>
+      <Icon size={12} />
+      <span className="text-[11px] font-medium">{config.label}</span>
     </div>
   );
 }
@@ -74,7 +73,6 @@ export function ChatPanel() {
   const phase = useChatStore((s) => s.phase);
   const renderSpec = useChatStore((s) => s.renderSpec);
 
-  const jobId = useAudioStore((s) => s.jobId);
   const setView = useAudioStore((s) => s.setView);
   const analysis = useAnalysisStore((s) => s.analysis);
 
@@ -93,12 +91,10 @@ export function ChatPanel() {
     if (analysis && isConnected && !initialAnalysisSent.current) {
       initialAnalysisSent.current = true;
 
-      // Check if there's already a user message queued
       const existingUserMsg = messages.find((m) => m.role === "user");
       if (existingUserMsg) {
         sendMessage(existingUserMsg.content);
       } else {
-        // Send a default analysis request
         const defaultPrompt = "Analyze this track and suggest a visualization concept.";
         addMessage({
           id: createMessageId(),
@@ -109,7 +105,6 @@ export function ChatPanel() {
         sendMessage(defaultPrompt);
       }
     }
-    // Only run when analysis first completes or connection established
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [analysis, isConnected]);
 
@@ -145,64 +140,59 @@ export function ChatPanel() {
   const canSend = analysis && !isStreaming && phase !== "rendering";
 
   return (
-    <div className="flex h-full flex-col bg-bg-secondary">
+    <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold">Creative Director</h2>
-        <p className="text-xs text-text-secondary">
-          {analysis
-            ? "Discuss visualization ideas for your track"
-            : "Analyzing your track..."}
-        </p>
-        {analysis && (
-          <div className="mt-1">
-            <PhaseIndicator phase={phase} />
-          </div>
-        )}
+      <div className="flex items-center justify-between border-b border-border bg-bg-secondary px-4 py-3">
+        <h2 className="text-sm font-semibold text-text-primary">Creative Director</h2>
+        {analysis && <PhaseIndicator phase={phase} />}
       </div>
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 space-y-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-5 space-y-5">
         {messages.map((msg) => (
           <ChatMessage key={msg.id} message={msg} />
         ))}
 
         {renderSpec && phase === "rendering" && (
-          <div className="rounded-lg border border-accent/30 bg-accent/5 p-3 text-xs text-text-secondary">
-            <div className="flex items-center gap-2 mb-1">
-              <Clapperboard size={14} className="text-accent" />
-              <span className="font-medium text-text-primary">Render spec ready</span>
-            </div>
-            <p>
-              Template: {(renderSpec as any).global_style?.template ?? (renderSpec as any).globalStyle?.template ?? "—"} | Sections: {(renderSpec as any).sections?.length ?? 0}
+          <div className="mx-auto max-w-md rounded-xl border border-accent/20 bg-accent/5 p-4 text-center">
+            <Clapperboard size={20} className="mx-auto mb-2 text-accent" />
+            <p className="text-sm font-medium text-text-primary">Render spec ready</p>
+            <p className="mt-1 text-xs text-text-secondary">
+              Template: {(renderSpec as any).global_style?.template ?? (renderSpec as any).globalStyle?.template ?? "—"} | {(renderSpec as any).sections?.length ?? 0} sections
             </p>
           </div>
         )}
 
         {isStreaming && (
-          <div className="flex items-center gap-2 text-xs text-text-secondary">
-            <Loader2 size={12} className="animate-spin" />
-            Thinking...
+          <div className="flex items-center gap-2 pl-10 text-xs text-text-secondary">
+            <Loader2 size={12} className="animate-spin text-accent" />
+            <span>Thinking...</span>
           </div>
         )}
       </div>
 
       {/* Input */}
-      <div className="border-t border-border p-3">
-        <div className="flex gap-2">
+      <div className="border-t border-border bg-bg-secondary p-3">
+        <div className="flex items-end gap-2">
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder={getPlaceholder(phase, !!analysis)}
             disabled={!canSend}
-            rows={2}
-            className="flex-1 resize-none rounded-lg border border-border bg-bg-tertiary px-3 py-2 text-sm text-text-primary placeholder:text-text-secondary/50 focus:border-accent focus:outline-none disabled:opacity-50"
+            rows={1}
+            className="flex-1 resize-none rounded-xl border border-border bg-bg-tertiary px-4 py-2.5 text-sm text-text-primary placeholder:text-text-secondary/40 focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/30 disabled:opacity-40"
+            style={{ minHeight: "2.5rem", maxHeight: "8rem" }}
+            onInput={(e) => {
+              const target = e.target as HTMLTextAreaElement;
+              target.style.height = "auto";
+              target.style.height = Math.min(target.scrollHeight, 128) + "px";
+            }}
           />
           <button
             onClick={handleSend}
             disabled={!input.trim() || !canSend}
-            className="flex h-10 w-10 items-center justify-center self-end rounded-lg bg-accent text-white hover:bg-accent-hover disabled:opacity-40"
+            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent text-white transition hover:bg-accent-hover disabled:opacity-30 disabled:hover:bg-accent"
           >
             <Send size={16} />
           </button>

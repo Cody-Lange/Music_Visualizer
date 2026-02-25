@@ -79,12 +79,12 @@ class TestStreamChat:
         mock_chunk2 = MagicMock()
         mock_chunk2.text = "world!"
 
-        async def mock_stream(*args, **kwargs):
+        async def mock_async_iter():
             for chunk in [mock_chunk1, mock_chunk2]:
                 yield chunk
 
         mock_chat = MagicMock()
-        mock_chat.send_message_stream = MagicMock(return_value=mock_stream())
+        mock_chat.send_message_stream = AsyncMock(return_value=mock_async_iter())
 
         mock_chats = MagicMock()
         mock_chats.create.return_value = mock_chat
@@ -144,13 +144,13 @@ class TestStreamChat:
     ) -> None:
         mock_settings.google_ai_api_key = "test-key"
 
-        async def mock_stream(*args, **kwargs):
+        async def mock_async_iter():
             chunk = MagicMock()
             chunk.text = "response"
             yield chunk
 
         mock_chat = MagicMock()
-        mock_chat.send_message_stream = MagicMock(return_value=mock_stream())
+        mock_chat.send_message_stream = AsyncMock(return_value=mock_async_iter())
 
         mock_chats = MagicMock()
         mock_chats.create.return_value = mock_chat

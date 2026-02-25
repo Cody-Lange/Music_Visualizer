@@ -227,7 +227,7 @@ class LLMService:
                 config=config,
             )
 
-            response = chat.send_message_stream(
+            response = await chat.send_message_stream(
                 last_content.parts[0].text if last_content.parts else "",
             )
 
