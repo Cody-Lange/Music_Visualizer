@@ -8,26 +8,25 @@ describe("useVisualizerStore", () => {
 
   it("has correct initial state", () => {
     const state = useVisualizerStore.getState();
-    expect(state.activeTemplate).toBe("nebula");
+    expect(state.customShaderCode).toBeNull();
+    expect(state.shaderDescription).toBeNull();
+    expect(state.shaderError).toBeNull();
+    expect(state.isGeneratingShader).toBe(false);
     expect(state.isPreviewPlaying).toBe(false);
   });
 
-  it("setActiveTemplate updates the template", () => {
-    useVisualizerStore.getState().setActiveTemplate("geometric");
-    expect(useVisualizerStore.getState().activeTemplate).toBe("geometric");
+  it("setCustomShaderCode updates shader and clears error", () => {
+    useVisualizerStore.getState().setShaderError("some error");
+    useVisualizerStore.getState().setCustomShaderCode("void mainImage(out vec4 f, in vec2 c) { f = vec4(1.0); }");
+
+    const state = useVisualizerStore.getState();
+    expect(state.customShaderCode).toContain("mainImage");
+    expect(state.shaderError).toBeNull();
   });
 
-  it("setActiveTemplate to each template type", () => {
-    const templates = [
-      "nebula", "geometric", "waveform", "cinematic",
-      "retro", "nature", "abstract", "urban",
-      "glitchbreak", "90s-anime",
-    ] as const;
-
-    for (const template of templates) {
-      useVisualizerStore.getState().setActiveTemplate(template);
-      expect(useVisualizerStore.getState().activeTemplate).toBe(template);
-    }
+  it("setShaderDescription stores the description", () => {
+    useVisualizerStore.getState().setShaderDescription("Raymarched fractal nebula");
+    expect(useVisualizerStore.getState().shaderDescription).toBe("Raymarched fractal nebula");
   });
 
   it("setIsPreviewPlaying updates playing state", () => {
@@ -39,12 +38,17 @@ describe("useVisualizerStore", () => {
   });
 
   it("reset restores defaults", () => {
-    useVisualizerStore.getState().setActiveTemplate("retro");
+    useVisualizerStore.getState().setCustomShaderCode("some code");
+    useVisualizerStore.getState().setShaderDescription("desc");
     useVisualizerStore.getState().setIsPreviewPlaying(true);
+    useVisualizerStore.getState().setIsGeneratingShader(true);
     useVisualizerStore.getState().reset();
 
     const state = useVisualizerStore.getState();
-    expect(state.activeTemplate).toBe("nebula");
+    expect(state.customShaderCode).toBeNull();
+    expect(state.shaderDescription).toBeNull();
+    expect(state.shaderError).toBeNull();
+    expect(state.isGeneratingShader).toBe(false);
     expect(state.isPreviewPlaying).toBe(false);
   });
 });

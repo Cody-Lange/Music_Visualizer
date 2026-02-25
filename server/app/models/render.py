@@ -10,7 +10,7 @@ def _to_camel(string: str) -> str:
 
 
 VisualTemplate = Literal[
-    "nebula", "geometric", "waveform", "cinematic", "retro", "nature", "abstract", "urban",
+    "shader", "nebula", "geometric", "waveform", "cinematic", "retro", "nature", "abstract", "urban",
     "glitchbreak", "90s-anime",
 ]
 MotionStyle = Literal[
@@ -62,7 +62,8 @@ class SectionSpec(BaseModel):
 class GlobalStyle(BaseModel):
     model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
 
-    template: VisualTemplate = "nebula"
+    template: VisualTemplate = "shader"
+    shader_description: str = ""
     style_modifiers: list[str] = Field(default_factory=list)
     recurring_motifs: list[str] = Field(default_factory=list)
     lyrics_display: LyricsDisplayConfig = Field(default_factory=LyricsDisplayConfig)

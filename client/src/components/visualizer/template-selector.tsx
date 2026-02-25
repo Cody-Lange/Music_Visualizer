@@ -1,36 +1,22 @@
 import { useCallback, useState } from "react";
 import { useVisualizerStore } from "@/stores/visualizer-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
-import type { VisualTemplate } from "@/types/render";
-
-const TEMPLATES: { key: VisualTemplate; label: string }[] = [
-  { key: "nebula", label: "Nebula" },
-  { key: "geometric", label: "Geometric" },
-  { key: "waveform", label: "Waveform" },
-  { key: "cinematic", label: "Cinematic" },
-  { key: "retro", label: "Retro" },
-  { key: "nature", label: "Nature" },
-  { key: "abstract", label: "Abstract" },
-  { key: "urban", label: "Urban" },
-  { key: "glitchbreak", label: "Glitchbreak" },
-  { key: "90s-anime", label: "90s Anime" },
-];
 
 export function TemplateSelector() {
-  const activeTemplate = useVisualizerStore((s) => s.activeTemplate);
-  const setActiveTemplate = useVisualizerStore((s) => s.setActiveTemplate);
   const customShaderCode = useVisualizerStore((s) => s.customShaderCode);
+  const shaderDescription = useVisualizerStore((s) => s.shaderDescription);
   const setCustomShaderCode = useVisualizerStore((s) => s.setCustomShaderCode);
+  const setShaderDescription = useVisualizerStore((s) => s.setShaderDescription);
   const isGeneratingShader = useVisualizerStore((s) => s.isGeneratingShader);
   const setIsGeneratingShader = useVisualizerStore((s) => s.setIsGeneratingShader);
+  const shaderError = useVisualizerStore((s) => s.shaderError);
   const setShaderError = useVisualizerStore((s) => s.setShaderError);
   const analysis = useAnalysisStore((s) => s.analysis);
 
   const [shaderPrompt, setShaderPrompt] = useState("");
-  const [showPrompt, setShowPrompt] = useState(false);
 
-  const handleGenerateShader = useCallback(async () => {
-    const description = shaderPrompt.trim() || `A ${activeTemplate}-style music visualization`;
+  const handleGenerateShader = useCallback(async (description?: string) => {
+    const desc = description || shaderPrompt.trim() || shaderDescription || "A mesmerizing audio-reactive visualization";
     const moodTags = analysis?.mood?.tags ?? [];
 
     setIsGeneratingShader(true);
@@ -41,8 +27,7 @@ export function TemplateSelector() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          description,
-          template: activeTemplate,
+          description: desc,
           mood_tags: moodTags,
         }),
       });
@@ -54,7 +39,7 @@ export function TemplateSelector() {
       const data = await res.json();
       if (data.shader_code) {
         setCustomShaderCode(data.shader_code);
-        setShowPrompt(false);
+        setShaderDescription(desc);
         setShaderPrompt("");
       }
     } catch (err) {
@@ -63,87 +48,59 @@ export function TemplateSelector() {
     } finally {
       setIsGeneratingShader(false);
     }
-  }, [shaderPrompt, activeTemplate, analysis, setIsGeneratingShader, setShaderError, setCustomShaderCode]);
-
-  const handleClearShader = useCallback(() => {
-    setCustomShaderCode(null);
-    setShaderError(null);
-  }, [setCustomShaderCode, setShaderError]);
-
-  const handleTemplateClick = useCallback(
-    (key: VisualTemplate) => {
-      setActiveTemplate(key);
-      // Switch back to built-in template, clearing custom shader
-      if (customShaderCode) {
-        setCustomShaderCode(null);
-      }
-    },
-    [setActiveTemplate, customShaderCode, setCustomShaderCode],
-  );
+  }, [shaderPrompt, shaderDescription, analysis, setIsGeneratingShader, setShaderError, setCustomShaderCode, setShaderDescription]);
 
   return (
     <div className="px-3 py-2">
       <label className="mb-1.5 block text-xs font-medium text-text-secondary">
-        Visual Template
+        Shader Visualization
       </label>
-      <div className="flex flex-wrap gap-1.5">
-        {TEMPLATES.map(({ key, label }) => (
-          <button
-            key={key}
-            onClick={() => handleTemplateClick(key)}
-            className={`rounded px-2 py-1 text-xs transition ${
-              activeTemplate === key && !customShaderCode
-                ? "bg-accent text-white"
-                : "bg-bg-tertiary text-text-secondary hover:text-text-primary"
-            }`}
-          >
-            {label}
-          </button>
-        ))}
 
-        {/* AI Shader button */}
-        <button
-          onClick={() => {
-            if (customShaderCode) {
-              handleClearShader();
-            } else {
-              setShowPrompt(!showPrompt);
-            }
-          }}
-          disabled={isGeneratingShader}
-          className={`rounded px-2 py-1 text-xs transition ${
-            customShaderCode
-              ? "bg-purple-600 text-white"
-              : showPrompt
-                ? "bg-purple-600/20 text-purple-400 ring-1 ring-purple-500"
-                : "bg-purple-600/10 text-purple-400 hover:bg-purple-600/20"
-          }`}
-        >
-          {isGeneratingShader ? "Generating..." : customShaderCode ? "AI Shader (Clear)" : "AI Shader"}
-        </button>
+      {/* Status indicator */}
+      <div className="mb-2 flex items-center gap-2">
+        <div className={`h-2 w-2 rounded-full ${
+          isGeneratingShader
+            ? "bg-yellow-400 animate-pulse"
+            : customShaderCode
+              ? "bg-green-400"
+              : "bg-text-secondary/30"
+        }`} />
+        <span className="text-[11px] text-text-secondary">
+          {isGeneratingShader
+            ? "Generating shader..."
+            : customShaderCode
+              ? "Custom shader active"
+              : "Default shader — describe your vision below"
+          }
+        </span>
       </div>
 
       {/* Shader prompt input */}
-      {showPrompt && !customShaderCode && (
-        <div className="mt-2 flex gap-1.5">
-          <input
-            type="text"
-            value={shaderPrompt}
-            onChange={(e) => setShaderPrompt(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !isGeneratingShader) handleGenerateShader();
-            }}
-            placeholder="Describe the shader (or leave empty for auto)..."
-            className="flex-1 rounded border border-border bg-bg-tertiary px-2.5 py-1.5 text-xs text-text-primary placeholder:text-text-secondary/40 focus:border-purple-500 focus:outline-none"
-          />
-          <button
-            onClick={handleGenerateShader}
-            disabled={isGeneratingShader}
-            className="rounded bg-purple-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-purple-700 disabled:opacity-40"
-          >
-            {isGeneratingShader ? "..." : "Generate"}
-          </button>
-        </div>
+      <div className="flex gap-1.5">
+        <input
+          type="text"
+          value={shaderPrompt}
+          onChange={(e) => setShaderPrompt(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !isGeneratingShader) handleGenerateShader();
+          }}
+          placeholder={shaderDescription || "Raymarched fractals, particle nebula, geometric corridors..."}
+          className="flex-1 rounded border border-border bg-bg-tertiary px-2.5 py-1.5 text-xs text-text-primary placeholder:text-text-secondary/40 focus:border-accent focus:outline-none"
+        />
+        <button
+          onClick={() => handleGenerateShader()}
+          disabled={isGeneratingShader}
+          className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition hover:bg-accent-hover disabled:opacity-40"
+        >
+          {isGeneratingShader ? "..." : customShaderCode ? "Regenerate" : "Generate"}
+        </button>
+      </div>
+
+      {/* Error display */}
+      {shaderError && (
+        <p className="mt-1.5 text-[11px] text-red-400 truncate" title={shaderError}>
+          {shaderError}
+        </p>
       )}
     </div>
   );

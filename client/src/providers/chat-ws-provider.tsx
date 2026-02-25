@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useRef, useState, useCallback, ty
 import { ChatWebSocket } from "@/services/websocket";
 import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
+import { useVisualizerStore } from "@/stores/visualizer-store";
 
 interface ChatWsContextType {
   sendMessage: (content: string) => void;
@@ -15,6 +16,36 @@ const ChatWsContext = createContext<ChatWsContextType>({
 
 export function useChatWs() {
   return useContext(ChatWsContext);
+}
+
+/**
+ * Auto-generate a GLSL shader from a description via the /api/shader/generate endpoint.
+ * Runs in the background — updates the visualizer store on success.
+ */
+async function autoGenerateShader(description: string, moodTags: string[] = []) {
+  const vizStore = useVisualizerStore.getState();
+  vizStore.setIsGeneratingShader(true);
+  vizStore.setShaderError(null);
+
+  try {
+    const res = await fetch("/api/shader/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ description, mood_tags: moodTags }),
+    });
+
+    if (!res.ok) return;
+
+    const data = await res.json();
+    if (data.shader_code) {
+      useVisualizerStore.getState().setCustomShaderCode(data.shader_code);
+      useVisualizerStore.getState().setShaderDescription(description);
+    }
+  } catch (err) {
+    console.warn("Auto shader generation failed:", err);
+  } finally {
+    useVisualizerStore.getState().setIsGeneratingShader(false);
+  }
 }
 
 export function ChatWebSocketProvider({ children }: { children: ReactNode }) {
@@ -80,6 +111,13 @@ export function ChatWebSocketProvider({ children }: { children: ReactNode }) {
         case "render_spec":
           if (message.render_spec) {
             useChatStore.getState().setRenderSpec(message.render_spec as any);
+
+            // Auto-generate shader from the render spec's shader description
+            const globalStyle = (message.render_spec as any)?.globalStyle;
+            const shaderDesc = globalStyle?.shaderDescription;
+            if (shaderDesc && typeof shaderDesc === "string") {
+              autoGenerateShader(shaderDesc);
+            }
           }
           break;
       }

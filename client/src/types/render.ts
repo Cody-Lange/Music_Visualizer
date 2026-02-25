@@ -1,4 +1,5 @@
 export type VisualTemplate =
+  | "shader"
   | "nebula"
   | "geometric"
   | "waveform"
@@ -58,6 +59,7 @@ export interface SectionSpec {
 
 export interface GlobalStyle {
   template: VisualTemplate;
+  shaderDescription?: string;
   styleModifiers: string[];
   recurringMotifs: string[];
   lyricsDisplay: LyricsDisplayConfig;

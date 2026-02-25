@@ -11,14 +11,14 @@ logger = logging.getLogger(__name__)
 
 class ShaderRequest(BaseModel):
     description: str = Field(..., min_length=1)
-    template: str = ""
     mood_tags: list[str] = Field(default_factory=list)
+    color_palette: list[str] = Field(default_factory=list)
 
 
 class ShaderRetryRequest(BaseModel):
     description: str = Field(..., min_length=1)
-    template: str = ""
     mood_tags: list[str] = Field(default_factory=list)
+    color_palette: list[str] = Field(default_factory=list)
     error: str = Field(..., min_length=1)
 
 
@@ -28,8 +28,8 @@ async def generate_shader(req: ShaderRequest) -> dict:
     llm = LLMService()
     code = await llm.generate_shader(
         description=req.description,
-        template=req.template,
         mood_tags=req.mood_tags if req.mood_tags else None,
+        color_palette=req.color_palette if req.color_palette else None,
     )
     if not code:
         raise HTTPException(status_code=500, detail="Shader generation failed")
@@ -42,8 +42,8 @@ async def retry_shader(req: ShaderRetryRequest) -> dict:
     llm = LLMService()
     code = await llm.generate_shader(
         description=req.description,
-        template=req.template,
         mood_tags=req.mood_tags if req.mood_tags else None,
+        color_palette=req.color_palette if req.color_palette else None,
         retry_error=req.error,
     )
     if not code:
