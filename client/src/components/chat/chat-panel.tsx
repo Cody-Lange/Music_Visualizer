@@ -73,6 +73,7 @@ export function ChatPanel() {
   const isStreaming = useChatStore((s) => s.isStreaming);
   const addMessage = useChatStore((s) => s.addMessage);
   const phase = useChatStore((s) => s.phase);
+  const setPhase = useChatStore((s) => s.setPhase);
   const renderSpec = useChatStore((s) => s.renderSpec);
   const initialAnalysisSent = useChatStore((s) => s.initialAnalysisSent);
   const setInitialAnalysisSent = useChatStore((s) => s.setInitialAnalysisSent);
@@ -113,16 +114,27 @@ export function ChatPanel() {
         renderStore.setStatus("rendering");
         renderStore.setProgress(0, "Starting render...");
 
+        // Strip useAiKeyframes — it's stored separately on the job
+        const { useAiKeyframes: _, ...cleanSpec } = renderSpec as unknown as Record<string, unknown>;
+
         fetch("/api/render/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            job_id: jobId,
-            render_spec: renderSpec,
+            jobId,
+            renderSpec: cleanSpec,
           }),
         })
-          .then((res) => {
-            if (!res.ok) throw new Error(`Render failed: ${res.status}`);
+          .then(async (res) => {
+            if (!res.ok) {
+              // Read the error detail for debugging
+              let detail = `HTTP ${res.status}`;
+              try {
+                const errBody = await res.json();
+                detail = errBody.detail || JSON.stringify(errBody);
+              } catch { /* ignore parse errors */ }
+              throw new Error(detail);
+            }
             return res.json();
           })
           .then((data) => {
@@ -148,12 +160,19 @@ export function ChatPanel() {
           .catch((err) => {
             console.error("Render error:", err);
             renderStore.setError(String(err));
-            // Still navigate to editor so user sees status
-            setView("editor");
+            renderTriggered.current = false;
+            // Reset phase so user can retry
+            setPhase("confirmation");
+            addMessage({
+              id: createMessageId(),
+              role: "system",
+              content: `Render failed: ${err.message ?? err}. You can try again.`,
+              timestamp: Date.now(),
+            });
           });
       }
     }
-  }, [phase, renderSpec, setView, jobId, renderStore]);
+  }, [phase, renderSpec, setView, setPhase, jobId, renderStore, addMessage]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -205,12 +224,12 @@ export function ChatPanel() {
           <ChatMessage key={msg.id} message={msg} />
         ))}
 
-        {renderSpec && phase === "rendering" && (
+        {renderSpec && phase === "rendering" && !renderStore.error && (
           <div className="mx-auto max-w-md rounded-xl border border-accent/20 bg-accent/5 p-4 text-center">
             <Clapperboard size={20} className="mx-auto mb-2 text-accent" />
             <p className="text-sm font-medium text-text-primary">Rendering your video...</p>
             <p className="mt-1 text-xs text-text-secondary">
-              Template: {(renderSpec as any).global_style?.template ?? (renderSpec as any).globalStyle?.template ?? "—"} | {(renderSpec as any).sections?.length ?? 0} sections
+              Template: {(renderSpec as any).globalStyle?.template ?? "—"} | {(renderSpec as any).sections?.length ?? 0} sections
             </p>
             <div className="mt-2">
               <Loader2 size={16} className="mx-auto animate-spin text-accent" />

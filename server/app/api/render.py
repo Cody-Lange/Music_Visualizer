@@ -1,9 +1,10 @@
 import logging
 import uuid
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from pydantic import ValidationError
 
-from app.models.render import RenderRequest, RenderEditRequest
+from app.models.render import RenderEditRequest, RenderSpec
 from app.services.ai_image_service import AIImageService
 from app.services.render_service import RenderService
 from app.services.storage import job_store
@@ -13,14 +14,34 @@ logger = logging.getLogger(__name__)
 
 
 @router.post("/start")
-async def start_render(request: RenderRequest) -> dict:
+async def start_render(req: Request) -> dict:
     """Submit a render spec and start video generation.
 
-    If the render spec includes useAiKeyframes=true (set via the raw JSON
-    from the chat), AI keyframe images are generated for each section before
-    the video is rendered.
+    Accepts both camelCase and snake_case field names.
+    AI keyframe images are generated when use_ai_keyframes is set on the job.
     """
-    job = job_store.get_job(request.job_id)
+    # Parse and validate manually for better error reporting
+    try:
+        body = await req.json()
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}") from e
+
+    # Extract job_id from either naming convention
+    job_id = body.get("jobId") or body.get("job_id")
+    if not job_id:
+        raise HTTPException(status_code=422, detail="Missing jobId")
+
+    raw_spec = body.get("renderSpec") or body.get("render_spec") or {}
+    # Strip fields not in the RenderSpec model
+    raw_spec.pop("useAiKeyframes", None)
+
+    try:
+        render_spec = RenderSpec.model_validate(raw_spec)
+    except ValidationError as e:
+        logger.warning("Render spec validation failed: %s", e)
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+    job = job_store.get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Audio job not found")
 
@@ -31,22 +52,21 @@ async def start_render(request: RenderRequest) -> dict:
     render_id = str(uuid.uuid4())
     job_store.create_job(render_id, {
         "type": "render",
-        "audio_job_id": request.job_id,
-        "render_spec": request.render_spec.model_dump(),
+        "audio_job_id": job_id,
+        "render_spec": render_spec.model_dump(),
         "status": "queued",
         "percentage": 0,
     })
 
-    # Check if AI keyframes were requested (passed as extra field in raw JSON)
-    raw_spec = job.get("render_spec", {})
-    use_ai = raw_spec.get("useAiKeyframes", False)
+    # Check if AI keyframes were requested (stored separately by chat handler)
+    use_ai = job.get("use_ai_keyframes", False)
 
     render_service = RenderService()
     keyframe_paths: dict[str, str] = {}
 
     try:
         # Step 1: Generate AI keyframes if requested
-        if use_ai and request.render_spec.sections:
+        if use_ai and render_spec.sections:
             job_store.update_job(render_id, {
                 "status": "generating_keyframes",
                 "percentage": 10,
@@ -55,10 +75,10 @@ async def start_render(request: RenderRequest) -> dict:
 
             ai_service = AIImageService()
             try:
-                aspect = request.render_spec.export_settings.aspect_ratio
+                aspect = render_spec.export_settings.aspect_ratio
                 keyframe_paths = await ai_service.generate_keyframes(
-                    sections=request.render_spec.sections,
-                    global_style=request.render_spec.global_style,
+                    sections=render_spec.sections,
+                    global_style=render_spec.global_style,
                     aspect_ratio=aspect,
                 )
             except Exception:
@@ -77,7 +97,7 @@ async def start_render(request: RenderRequest) -> dict:
             render_id=render_id,
             audio_path=audio_path,
             analysis=analysis,
-            render_spec=request.render_spec,
+            render_spec=render_spec,
             lyrics=job.get("lyrics"),
             keyframe_paths=keyframe_paths if keyframe_paths else None,
         )

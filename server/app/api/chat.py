@@ -233,11 +233,13 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                     # Also detect from user message
                     if re.search(r"\bwith\s+ai\b", user_content, re.IGNORECASE):
                         use_ai = True
-                    render_spec["useAiKeyframes"] = use_ai
 
-                    # Store the render spec on the job
+                    # Store the render spec and AI flag on the job separately
                     if job_id:
-                        job_store.update_job(job_id, {"render_spec": render_spec})
+                        job_store.update_job(job_id, {
+                            "render_spec": render_spec,
+                            "use_ai_keyframes": use_ai,
+                        })
 
                     await websocket.send_text(json.dumps({
                         "type": "system",

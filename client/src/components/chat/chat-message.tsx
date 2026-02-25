@@ -29,9 +29,20 @@ function inlineFormat(text: string): string {
   return result;
 }
 
+/** Strip ```json blocks containing render specs from LLM output. */
+function stripRenderSpecJson(text: string): string {
+  // Remove ```json blocks that look like render specs (contain globalStyle/global_style)
+  return text.replace(
+    /```(?:json)?\s*\n\s*\{[\s\S]*?(?:"globalStyle"|"global_style")[\s\S]*?\n\s*```/g,
+    "",
+  ).trim();
+}
+
 /** Minimal markdown renderer for LLM responses. */
 function renderMarkdown(text: string): string {
-  const lines = text.split("\n");
+  // Strip render spec JSON blocks — users shouldn't see raw JSON
+  const cleaned = stripRenderSpecJson(text);
+  const lines = cleaned.split("\n");
   const out: string[] = [];
   let inCodeBlock = false;
 
