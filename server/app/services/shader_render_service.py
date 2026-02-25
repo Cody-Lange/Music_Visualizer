@@ -5,6 +5,7 @@ driving them with per-frame audio features extracted from the analysis data.
 Output is piped as raw RGBA frames into FFmpeg for encoding.
 """
 
+import asyncio
 import logging
 import math
 import struct
@@ -145,7 +146,22 @@ class ShaderRenderService:
         """Render a complete video from a GLSL shader + audio analysis.
 
         Produces an MP4 with the shader visuals driven by per-frame audio features.
+        The heavy GL + FFmpeg work runs in a thread to avoid blocking the event loop.
         """
+        return await asyncio.to_thread(
+            self._render_blocking,
+            render_id, audio_path, analysis, render_spec, shader_code,
+        )
+
+    def _render_blocking(
+        self,
+        render_id: str,
+        audio_path: str,
+        analysis: dict,
+        render_spec: RenderSpec,
+        shader_code: str,
+    ) -> dict:
+        """Synchronous render implementation (called from a thread)."""
         width, height = render_spec.export_settings.resolution
         fps = render_spec.export_settings.fps
         duration = analysis.get("metadata", {}).get("duration", 60.0)
@@ -240,6 +256,10 @@ class ShaderRenderService:
 
         total_frames = int(duration * fps)
 
+        # Scale FFmpeg finalization timeout: encoding overhead after all frames
+        # are piped depends on duration, resolution, and the faststart muxer pass.
+        ffmpeg_timeout = max(120, int(duration * 2) + 60)
+
         try:
             fbo.use()
 
@@ -294,20 +314,32 @@ class ShaderRenderService:
                     logger.info("Shader render %s: %d%% (%d/%d frames)", render_id, pct, frame_idx, total_frames)
 
         finally:
-            proc.stdin.close()
-            proc.wait(timeout=60)
-
-            if proc.returncode != 0:
-                stderr = proc.stderr.read().decode(errors="replace")
-                logger.error("FFmpeg failed: %s", stderr[-500:])
-                raise RuntimeError(f"FFmpeg encoding failed (rc={proc.returncode})")
-
-            # Cleanup GL resources
+            # Always release GL resources first (independent of FFmpeg)
             vao.release()
             vbo.release()
             prog.release()
             fbo.release()
             ctx.release()
+
+            # Close FFmpeg stdin to signal end-of-stream, then wait
+            proc.stdin.close()
+            try:
+                proc.wait(timeout=ffmpeg_timeout)
+            except subprocess.TimeoutExpired:
+                logger.error(
+                    "FFmpeg timed out after %ds for render %s, killing",
+                    ffmpeg_timeout, render_id,
+                )
+                proc.kill()
+                proc.wait(timeout=10)
+                raise RuntimeError(
+                    f"FFmpeg encoding timed out after {ffmpeg_timeout}s"
+                )
+
+            if proc.returncode != 0:
+                stderr = proc.stderr.read().decode(errors="replace")
+                logger.error("FFmpeg failed: %s", stderr[-500:])
+                raise RuntimeError(f"FFmpeg encoding failed (rc={proc.returncode})")
 
         download_url = f"/storage/renders/{render_id}.mp4"
         logger.info("Shader render complete: %s → %s", render_id, download_url)
