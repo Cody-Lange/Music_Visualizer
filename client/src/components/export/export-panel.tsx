@@ -81,17 +81,22 @@ export function ExportPanel() {
           <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-tertiary">
             {percentage > 0 ? (
               <div
-                className="h-full rounded-full bg-accent transition-all duration-300"
+                className="h-full rounded-full bg-accent transition-all duration-500"
                 style={{ width: `${percentage}%` }}
               />
             ) : (
               <div className="h-full w-full animate-pulse rounded-full bg-accent/60" />
             )}
           </div>
-          <p className="mt-1 text-xs text-text-secondary">
-            <Loader2 size={10} className="mr-1 inline animate-spin" />
-            {renderMessage || "Processing..."}
-          </p>
+          <div className="mt-1 flex items-center justify-between">
+            <p className="text-xs text-text-secondary">
+              <Loader2 size={10} className="mr-1 inline animate-spin" />
+              {renderMessage || "Processing..."}
+            </p>
+            {percentage > 0 && (
+              <p className="text-xs font-medium text-accent">{percentage}%</p>
+            )}
+          </div>
         </div>
       )}
 

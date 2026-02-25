@@ -11,6 +11,7 @@ import math
 import struct
 import subprocess
 import tempfile
+import time as _time
 from pathlib import Path
 
 import numpy as np
@@ -734,6 +735,8 @@ class ShaderRenderService:
         shader_code: str,
     ) -> dict:
         """Synchronous render implementation (called from a thread)."""
+        from app.services.storage import job_store
+
         width, height = render_spec.export_settings.resolution
         fps = render_spec.export_settings.fps
         duration = analysis.get("metadata", {}).get("duration", 60.0)
@@ -857,6 +860,9 @@ class ShaderRenderService:
             alpha_slow = 1.0 - math.exp(-dt / 0.15)   # ~15 frame smoothing @ 30fps
             alpha_mid = 1.0 - math.exp(-dt / 0.10)    # ~10 frame smoothing @ 30fps
 
+            # Wall-clock timer for progress estimation
+            render_start_time = _time.monotonic()
+
             # Smoothed values (start at resting state)
             s_bass = 0.0
             s_low_mid = 0.0
@@ -927,6 +933,51 @@ class ShaderRenderService:
                 frame = np.flipud(frame)
                 proc.stdin.write(frame.tobytes())
 
+                # ── Progress updates (every ~2 seconds of video time) ──
+                update_interval = max(1, fps * 2)  # every 2s of video
+                if frame_idx % update_interval == 0:
+                    pct = int(20 + (frame_idx / total_frames) * 75)  # 20-95%
+                    elapsed = frame_idx / fps  # seconds of video rendered
+                    duration_total = total_frames / fps
+                    # Estimate wall-clock time remaining from render speed
+                    now = _time.monotonic()
+                    wall_elapsed = now - render_start_time
+                    if frame_idx > 0 and wall_elapsed > 0:
+                        fps_actual = frame_idx / wall_elapsed
+                        remaining_frames = total_frames - frame_idx
+                        est_remaining = remaining_frames / fps_actual
+                    else:
+                        est_remaining = None
+
+                    job_store.update_job(render_id, {
+                        "status": "rendering",
+                        "percentage": pct,
+                        "message": f"Rendering frame {frame_idx}/{total_frames} ({pct}%)",
+                        "current_frame": frame_idx,
+                        "total_frames": total_frames,
+                        "elapsed_seconds": round(wall_elapsed, 1),
+                        "estimated_remaining": round(est_remaining, 1) if est_remaining else None,
+                    })
+
+                # ── Save preview frame (every ~5 seconds of video time) ──
+                preview_interval = max(1, fps * 5)
+                if frame_idx % preview_interval == 0 and frame_idx > 0:
+                    try:
+                        preview_dir = Path(settings.storage_path) / "renders" / "previews"
+                        preview_dir.mkdir(parents=True, exist_ok=True)
+                        preview_path = preview_dir / f"{render_id}.jpg"
+                        # Downsample to 480px wide for faster transfer
+                        from PIL import Image
+                        img = Image.fromarray(frame[:, :, :3])  # RGBA → RGB
+                        thumb_w = 480
+                        thumb_h = int(height * thumb_w / width)
+                        img = img.resize((thumb_w, thumb_h), Image.LANCZOS)
+                        img.save(str(preview_path), "JPEG", quality=70)
+                        preview_url = f"/storage/renders/previews/{render_id}.jpg"
+                        job_store.update_job(render_id, {"preview_url": preview_url})
+                    except Exception:
+                        pass  # Preview is best-effort, don't break render
+
                 # Log progress periodically
                 if frame_idx % (fps * 10) == 0 and frame_idx > 0:
                     pct = int(frame_idx / total_frames * 100)
@@ -939,6 +990,14 @@ class ShaderRenderService:
             prog.release()
             fbo.release()
             ctx.release()
+
+            # Update status to encoding phase
+            job_store.update_job(render_id, {
+                "status": "encoding",
+                "percentage": 95,
+                "message": "Encoding final video...",
+                "current_frame": total_frames,
+            })
 
             # Close FFmpeg stdin to signal end-of-stream, then wait
             proc.stdin.close()

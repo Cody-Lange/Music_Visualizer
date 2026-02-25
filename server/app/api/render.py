@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import uuid
 
@@ -64,12 +65,86 @@ def _sanitize_render_spec(spec: dict) -> dict:
     return spec
 
 
+async def _run_render(
+    render_id: str,
+    audio_path: str,
+    analysis: dict,
+    render_spec: RenderSpec,
+    shader_code: str | None,
+    shader_desc: str | None,
+    mood_tags: list[str],
+) -> None:
+    """Background coroutine that runs the full render pipeline.
+
+    Updates job_store with status/progress so the client can poll.
+    """
+    try:
+        # Step 1: Generate shader code if we have a description but no code
+        if not shader_code and shader_desc:
+            job_store.update_job(render_id, {
+                "status": "generating_shader",
+                "percentage": 5,
+                "message": "Generating shader from description...",
+            })
+            logger.info("Generating shader for render %s", render_id)
+            llm = LLMService()
+            shader_code = await llm.generate_shader(
+                description=shader_desc,
+                mood_tags=mood_tags or None,
+            )
+
+        # Step 2: Render the video
+        job_store.update_job(render_id, {
+            "status": "rendering",
+            "percentage": 10,
+            "message": "Compiling shader...",
+        })
+
+        if shader_code:
+            # Use headless WebGL shader rendering
+            logger.info("Using shader render pipeline for %s", render_id)
+            shader_service = ShaderRenderService()
+            result = await shader_service.render_shader_video(
+                render_id=render_id,
+                audio_path=audio_path,
+                analysis=analysis,
+                render_spec=render_spec,
+                shader_code=shader_code,
+            )
+        else:
+            # Fallback to FFmpeg procedural pipeline
+            logger.info("No shader code available, using FFmpeg fallback for %s", render_id)
+            render_service = RenderService()
+            result = await render_service.render_video(
+                render_id=render_id,
+                audio_path=audio_path,
+                analysis=analysis,
+                render_spec=render_spec,
+                lyrics=None,
+            )
+
+        job_store.update_job(render_id, {
+            "status": "complete",
+            "percentage": 100,
+            "message": "Complete!",
+            "download_url": result.get("download_url"),
+        })
+
+    except Exception as e:
+        logger.exception("Render failed: %s", render_id)
+        job_store.update_job(render_id, {
+            "status": "error",
+            "error": str(e),
+            "message": f"Render failed: {e}",
+        })
+
+
 @router.post("/start")
 async def start_render(req: Request) -> dict:
     """Submit a render spec and start video generation.
 
-    Accepts both camelCase and snake_case field names.
-    AI keyframe images are generated when use_ai_keyframes is set on the job.
+    Returns immediately with the render_id.  The render runs in the
+    background — poll ``GET /{render_id}/status`` for progress.
     """
     # Parse and validate manually for better error reporting
     try:
@@ -100,12 +175,22 @@ async def start_render(req: Request) -> dict:
         raise HTTPException(status_code=400, detail="Audio analysis not complete")
 
     render_id = str(uuid.uuid4())
+    duration = analysis.get("metadata", {}).get("duration", 60.0)
+    fps = render_spec.export_settings.fps
+    total_frames = int(duration * fps)
+
     job_store.create_job(render_id, {
         "type": "render",
         "audio_job_id": job_id,
         "render_spec": render_spec.model_dump(),
         "status": "queued",
         "percentage": 0,
+        "message": "Queued...",
+        "total_frames": total_frames,
+        "current_frame": 0,
+        "preview_url": None,
+        "elapsed_seconds": 0,
+        "estimated_remaining": None,
     })
 
     audio_path = job.get("path", "")
@@ -115,71 +200,31 @@ async def start_render(req: Request) -> dict:
     # fall back to generating from the shader description.
     shader_code = body.get("shaderCode") or body.get("shader_code") or job.get("shader_code")
     shader_desc = render_spec.global_style.shader_description
+    mood_tags = analysis.get("mood", {}).get("tags", [])
 
-    try:
-        # Step 1: Generate shader code if we have a description but no code
-        if not shader_code and shader_desc:
-            job_store.update_job(render_id, {
-                "status": "generating_shader",
-                "percentage": 5,
-            })
-            logger.info("Generating shader for render %s", render_id)
-            llm = LLMService()
-            shader_code = await llm.generate_shader(
-                description=shader_desc,
-                mood_tags=analysis.get("mood", {}).get("tags", []),
-            )
-
-        # Step 2: Render the video
-        job_store.update_job(render_id, {
-            "status": "rendering",
-            "percentage": 20,
-        })
-
-        if shader_code:
-            # Use headless WebGL shader rendering
-            logger.info("Using shader render pipeline for %s", render_id)
-            shader_service = ShaderRenderService()
-            result = await shader_service.render_shader_video(
-                render_id=render_id,
-                audio_path=audio_path,
-                analysis=analysis,
-                render_spec=render_spec,
-                shader_code=shader_code,
-            )
-        else:
-            # Fallback to FFmpeg procedural pipeline
-            logger.info("No shader code available, using FFmpeg fallback for %s", render_id)
-            render_service = RenderService()
-            result = await render_service.render_video(
-                render_id=render_id,
-                audio_path=audio_path,
-                analysis=analysis,
-                render_spec=render_spec,
-                lyrics=job.get("lyrics"),
-            )
-
-        job_store.update_job(render_id, {
-            "status": "complete",
-            "percentage": 100,
-            "download_url": result.get("download_url"),
-        })
-
-    except Exception as e:
-        logger.exception("Render failed: %s", render_id)
-        job_store.update_job(render_id, {"status": "error", "error": str(e)})
-        raise HTTPException(status_code=500, detail=f"Render failed: {e}") from e
+    # Launch the render as a background task (non-blocking)
+    asyncio.create_task(
+        _run_render(
+            render_id=render_id,
+            audio_path=audio_path,
+            analysis=analysis,
+            render_spec=render_spec,
+            shader_code=shader_code,
+            shader_desc=shader_desc,
+            mood_tags=mood_tags,
+        ),
+    )
 
     return {
         "render_id": render_id,
-        "status": "complete",
-        "download_url": result.get("download_url"),
+        "status": "queued",
+        "total_frames": total_frames,
     }
 
 
 @router.get("/{render_id}/status")
 async def get_render_status(render_id: str) -> dict:
-    """Get render job progress."""
+    """Get render job progress with detailed metrics."""
     job = job_store.get_job(render_id)
     if not job:
         raise HTTPException(status_code=404, detail="Render job not found")
@@ -188,6 +233,12 @@ async def get_render_status(render_id: str) -> dict:
         "render_id": render_id,
         "status": job.get("status", "unknown"),
         "percentage": job.get("percentage", 0),
+        "message": job.get("message", ""),
+        "current_frame": job.get("current_frame", 0),
+        "total_frames": job.get("total_frames", 0),
+        "elapsed_seconds": job.get("elapsed_seconds", 0),
+        "estimated_remaining": job.get("estimated_remaining"),
+        "preview_url": job.get("preview_url"),
         "download_url": job.get("download_url"),
         "error": job.get("error"),
     }

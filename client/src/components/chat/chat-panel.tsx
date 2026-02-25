@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard, Play, Pencil } from "lucide-react";
+import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard, Play, Pencil, Clock, Film } from "lucide-react";
 import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
@@ -9,6 +9,7 @@ import { ChatMessage } from "@/components/chat/chat-message";
 import { AnalysisProgress } from "@/components/chat/analysis-progress";
 import { useChatWs } from "@/providers/chat-ws-provider";
 import type { ChatPhase } from "@/services/websocket";
+import type { RenderStatus } from "@/types/chat";
 
 const PHASE_CONFIG: Record<ChatPhase, { label: string; icon: typeof Sparkles; color: string }> = {
   analysis: {
@@ -86,6 +87,107 @@ function ActionButtons({ onAction, onRender }: { onAction: (text: string) => voi
   );
 }
 
+function formatTime(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.round(seconds % 60);
+  return `${mins}m ${secs}s`;
+}
+
+function RenderProgressCard() {
+  const percentage = useRenderStore((s) => s.percentage);
+  const message = useRenderStore((s) => s.message);
+  const currentFrame = useRenderStore((s) => s.currentFrame);
+  const totalFrames = useRenderStore((s) => s.totalFrames);
+  const elapsedSeconds = useRenderStore((s) => s.elapsedSeconds);
+  const estimatedRemaining = useRenderStore((s) => s.estimatedRemaining);
+  const previewUrl = useRenderStore((s) => s.previewUrl);
+  const status = useRenderStore((s) => s.status);
+
+  // Cache-bust preview images so the browser loads the latest frame
+  const previewSrc = previewUrl ? `${previewUrl}?t=${Math.floor(Date.now() / 2000)}` : null;
+
+  const statusLabel =
+    status === "generating_keyframes" || status === "queued"
+      ? "Preparing..."
+      : status === "encoding"
+        ? "Encoding video..."
+        : "Rendering";
+
+  return (
+    <div
+      ref={(el) => { el?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
+      className="mx-auto w-full max-w-lg rounded-xl border border-accent/20 bg-accent/5 p-5"
+    >
+      {/* Header */}
+      <div className="mb-3 flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-full bg-accent/10">
+          <Clapperboard size={18} className="text-accent" />
+        </div>
+        <div>
+          <p className="text-sm font-semibold text-text-primary">{statusLabel}</p>
+          <p className="text-xs text-text-secondary">{message || "Starting render..."}</p>
+        </div>
+      </div>
+
+      {/* Preview thumbnail */}
+      {previewSrc && (
+        <div className="mb-3 overflow-hidden rounded-lg border border-border/30">
+          <img
+            src={previewSrc}
+            alt="Render preview"
+            className="w-full object-cover"
+            style={{ aspectRatio: "16/9" }}
+          />
+        </div>
+      )}
+
+      {/* Progress bar */}
+      <div className="mb-3 h-2.5 w-full overflow-hidden rounded-full bg-bg-tertiary">
+        {percentage > 0 ? (
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-accent to-accent-hover transition-all duration-700 ease-out"
+            style={{ width: `${Math.min(percentage, 100)}%` }}
+          />
+        ) : (
+          <div
+            className="h-full rounded-full bg-accent/50"
+            style={{ width: "100%", animation: "pulse 1.5s ease-in-out infinite" }}
+          />
+        )}
+      </div>
+
+      {/* Stats row */}
+      <div className="flex items-center justify-between text-xs text-text-secondary">
+        <div className="flex items-center gap-3">
+          {totalFrames > 0 && (
+            <span className="flex items-center gap-1">
+              <Film size={11} />
+              {currentFrame.toLocaleString()}/{totalFrames.toLocaleString()}
+            </span>
+          )}
+          {percentage > 0 && (
+            <span className="font-medium text-accent">{percentage}%</span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          {elapsedSeconds > 0 && (
+            <span className="flex items-center gap-1">
+              <Clock size={11} />
+              {formatTime(elapsedSeconds)}
+            </span>
+          )}
+          {estimatedRemaining != null && estimatedRemaining > 0 && (
+            <span className="text-text-secondary/70">
+              ~{formatTime(estimatedRemaining)} left
+            </span>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function ChatPanel() {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -135,9 +237,9 @@ export function ChatPanel() {
   }, [analysis, isConnected, initialAnalysisSent, setInitialAnalysisSent, sendMessage]);
 
   // When phase transitions to "rendering" and we have a render spec,
-  // trigger the actual render and navigate to editor on success.
-  // Dependencies are only the values/actions we read — stable Zustand
-  // selectors won't trigger spurious re-runs.
+  // submit the render job and start polling for progress.
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   useEffect(() => {
     if (phase !== "rendering" || !renderSpec || renderTriggered.current) return;
     if (!jobId) return;
@@ -158,6 +260,7 @@ export function ChatPanel() {
     // Send the preview shader so the server renders the exact same visual
     const previewShaderCode = useVisualizerStore.getState().customShaderCode;
 
+    // Submit render job (returns immediately with render_id)
     fetch("/api/render/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -175,19 +278,64 @@ export function ChatPanel() {
         return res.json();
       })
       .then((data) => {
-        if (data.render_id) setRenderId(data.render_id);
-        if (data.download_url) {
-          setDownloadUrl(data.download_url);
-        } else if (data.render_id && data.status === "complete") {
-          fetch(`/api/render/${data.render_id}/download`)
-            .then((r) => r.json())
-            .then((d) => { if (d.download_url) setDownloadUrl(d.download_url); });
-        }
-        setRenderStatus("complete");
-        setRenderProgress(100, "Complete!");
-        renderTriggered.current = false;
-        setPhase("editing");
-        setView("editor");
+        if (!data.render_id) throw new Error("No render_id returned");
+        setRenderId(data.render_id);
+
+        // Start polling for progress every 1.5 seconds
+        const rid = data.render_id;
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = setInterval(async () => {
+          try {
+            const res = await fetch(`/api/render/${rid}/status`);
+            if (!res.ok) return;
+            const status = await res.json();
+
+            // Update render store with progress
+            const pct = status.percentage ?? 0;
+            const msg = status.message ?? "";
+            setRenderProgress(pct, msg);
+            if (status.status && status.status !== "complete" && status.status !== "error") {
+              setRenderStatus(status.status as RenderStatus);
+            }
+
+            // Update extended progress fields on the store
+            useRenderStore.getState().setProgressDetails?.({
+              currentFrame: status.current_frame,
+              totalFrames: status.total_frames,
+              elapsedSeconds: status.elapsed_seconds,
+              estimatedRemaining: status.estimated_remaining,
+              previewUrl: status.preview_url,
+            });
+
+            // Terminal states: stop polling
+            if (status.status === "complete") {
+              clearInterval(pollRef.current!);
+              pollRef.current = null;
+              if (status.download_url) {
+                setDownloadUrl(status.download_url);
+              }
+              setRenderStatus("complete");
+              setRenderProgress(100, "Complete!");
+              renderTriggered.current = false;
+              setPhase("editing");
+              setView("editor");
+            } else if (status.status === "error") {
+              clearInterval(pollRef.current!);
+              pollRef.current = null;
+              setRenderError(status.error || "Render failed");
+              renderTriggered.current = false;
+              setPhase("confirmation");
+              addMessage({
+                id: createMessageId(),
+                role: "system",
+                content: `Render failed: ${status.error || "Unknown error"}. You can try again using the buttons below.`,
+                timestamp: Date.now(),
+              });
+            }
+          } catch (e) {
+            console.warn("Render poll error:", e);
+          }
+        }, 1500);
       })
       .catch((err) => {
         console.error("Render error:", err);
@@ -201,6 +349,14 @@ export function ChatPanel() {
           timestamp: Date.now(),
         });
       });
+
+    // Cleanup: stop polling when unmounting or phase changes
+    return () => {
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    };
   }, [phase, renderSpec, jobId, setView, setPhase, addMessage, resetRender, setRenderStatus, setRenderProgress, setRenderId, setDownloadUrl, setRenderError]);
 
   const handleSend = useCallback(() => {
@@ -287,31 +443,7 @@ export function ChatPanel() {
         )}
 
         {renderSpec && phase === "rendering" && !renderError && !downloadUrl && (
-          <div
-            ref={(el) => { el?.scrollIntoView({ behavior: "smooth", block: "center" }); }}
-            className="mx-auto max-w-md rounded-xl border border-accent/20 bg-accent/5 p-5 text-center"
-          >
-            <div className="mx-auto mb-3 flex h-10 w-10 items-center justify-center rounded-full bg-accent/10">
-              <Clapperboard size={22} className="animate-pulse text-accent" />
-            </div>
-            <p className="text-sm font-semibold text-text-primary">Generating your video</p>
-            <p className="mt-1 text-xs text-text-secondary">
-              {(renderSpec as any).sections?.length ?? 0} sections &middot; Beat-synced shader rendering
-            </p>
-            <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-bg-tertiary">
-              <div
-                className="h-full rounded-full bg-gradient-to-r from-accent to-accent-hover transition-all duration-500"
-                style={{
-                  width: "100%",
-                  animation: "pulse 1.5s ease-in-out infinite",
-                }}
-              />
-            </div>
-            <p className="mt-2 text-xs text-text-secondary">
-              <Loader2 size={10} className="mr-1 inline animate-spin" />
-              Rendering shader video — this may take a few minutes...
-            </p>
-          </div>
+          <RenderProgressCard />
         )}
 
         {isStreaming && (
