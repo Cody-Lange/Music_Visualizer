@@ -329,19 +329,95 @@ class ShaderRenderService:
             raise RuntimeError("moderngl is not installed")
 
     @staticmethod
+    def _nvidia_static_check(shader_code: str) -> str | None:
+        """Catch GLSL patterns that NVIDIA rejects but Mesa accepts.
+
+        Returns ``None`` if the code looks clean, or an error string
+        describing the issue.  This runs *before* the real GL compile
+        so we can sanitize proactively on Mesa/EGL servers whose
+        compiler is too lenient.
+        """
+        import re as _re
+
+        lines = shader_code.split("\n")
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+
+            # Skip comments
+            if stripped.startswith("//"):
+                continue
+
+            # ── void(...) as expression (not a declaration) ──────
+            # Valid declaration: `void funcName(...)`
+            # Invalid expression: `void(...)` or `void();`
+            if _re.search(r"\bvoid\s*\(", stripped):
+                if not _re.match(r"^void\s+\w+\s*\(", stripped):
+                    return (
+                        f"NVIDIA compat: line {i}: "
+                        f"void() expression is invalid — {stripped}"
+                    )
+
+            # ── return void ─────────────────────────────────────
+            if _re.search(r"\breturn\s+void\b", stripped):
+                return (
+                    f"NVIDIA compat: line {i}: "
+                    f"return void is invalid — {stripped}"
+                )
+
+            # ── func(void) in a call ────────────────────────────
+            # Valid declaration: `float foo(void) {`
+            # Invalid call: `x = foo(void);`
+            if _re.search(r"\w+\s*\(\s*void\s*\)", stripped):
+                # Check if it's a declaration (has a type before the name)
+                if not _re.match(
+                    r"^(?:void|float|int|vec[234]|mat[234]|bool|"
+                    r"ivec[234])\s+\w+\s*\(\s*void\s*\)",
+                    stripped,
+                ):
+                    return (
+                        f"NVIDIA compat: line {i}: "
+                        f"func(void) call syntax is invalid "
+                        f"— {stripped}"
+                    )
+
+        return None
+
+    @staticmethod
     def _try_compile(shader_code: str) -> str | None:
         """Try compiling shader_code in a temporary GL context.
 
-        Returns None on success, or the error message string on failure.
+        Runs NVIDIA static analysis first (catches patterns Mesa
+        accepts but NVIDIA rejects), then compiles with ModernGL.
+        Returns None on success, or the error message string on
+        failure.
         """
+        # Run the sanitizer one more time as a safety net — the LLM
+        # service sanitizes output, but fix_shader and retry paths
+        # may introduce new patterns.
+        from app.services.llm_service import sanitize_shader_code
+
+        shader_code = sanitize_shader_code(shader_code)
+
+        # Static check for NVIDIA-incompatible patterns
+        nvidia_err = ShaderRenderService._nvidia_static_check(
+            shader_code,
+        )
+        if nvidia_err:
+            return nvidia_err
+
         import sys
         _kw: dict = {}
         if sys.platform.startswith("linux"):
             _kw["backend"] = "egl"
         ctx = moderngl.create_standalone_context(**_kw)
         try:
-            frag_src = _FRAGMENT_WRAPPER.format(user_code=shader_code)
-            ctx.program(vertex_shader=_VERTEX_SHADER, fragment_shader=frag_src)
+            frag_src = _FRAGMENT_WRAPPER.format(
+                user_code=shader_code,
+            )
+            ctx.program(
+                vertex_shader=_VERTEX_SHADER,
+                fragment_shader=frag_src,
+            )
             return None
         except Exception as e:
             return str(e)
