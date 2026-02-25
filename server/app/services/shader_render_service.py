@@ -174,8 +174,13 @@ class ShaderRenderService:
         high_mid_values = band_data.get("high_mid", [])
         treble_values = band_data.get("treble", [])
 
-        # Create OpenGL context and compile shader
-        ctx = moderngl.create_standalone_context(backend="egl")
+        # Create OpenGL context and compile shader.
+        # EGL is Linux-only; on Windows WGL is used automatically; on macOS CGL.
+        import sys
+        _backend_kwargs: dict = {}
+        if sys.platform.startswith("linux"):
+            _backend_kwargs["backend"] = "egl"
+        ctx = moderngl.create_standalone_context(**_backend_kwargs)
         fbo = ctx.framebuffer(
             color_attachments=[ctx.texture((width, height), 4)],
         )
