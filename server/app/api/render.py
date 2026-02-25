@@ -110,8 +110,10 @@ async def start_render(req: Request) -> dict:
 
     audio_path = job.get("path", "")
 
-    # Check if we have shader code (from the job or generate from shader description)
-    shader_code = job.get("shader_code")
+    # Check if we have shader code — prefer client-supplied code (the live
+    # preview shader the user already approved), then the job store, then
+    # fall back to generating from the shader description.
+    shader_code = body.get("shaderCode") or body.get("shader_code") or job.get("shader_code")
     shader_desc = render_spec.global_style.shader_description
 
     try:

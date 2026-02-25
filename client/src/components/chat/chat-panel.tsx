@@ -4,6 +4,7 @@ import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
 import { useRenderStore } from "@/stores/render-store";
+import { useVisualizerStore } from "@/stores/visualizer-store";
 import { ChatMessage } from "@/components/chat/chat-message";
 import { AnalysisProgress } from "@/components/chat/analysis-progress";
 import { useChatWs } from "@/providers/chat-ws-provider";
@@ -154,10 +155,13 @@ export function ChatPanel() {
     // Strip useAiKeyframes — it's stored separately on the job
     const { useAiKeyframes: _, ...cleanSpec } = renderSpec as unknown as Record<string, unknown>;
 
+    // Send the preview shader so the server renders the exact same visual
+    const previewShaderCode = useVisualizerStore.getState().customShaderCode;
+
     fetch("/api/render/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ jobId, renderSpec: cleanSpec }),
+      body: JSON.stringify({ jobId, renderSpec: cleanSpec, shaderCode: previewShaderCode }),
     })
       .then(async (res) => {
         if (!res.ok) {
