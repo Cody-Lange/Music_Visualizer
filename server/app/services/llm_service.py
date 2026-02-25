@@ -312,20 +312,35 @@ class LLMService:
                 return  # Success — stop retrying
 
             except ClientError as e:
-                if e.code == 429 and attempt < max_retries:
-                    delay = 15.0
-                    match = _re.search(
-                        r"retry in ([\d.]+)s", str(e), _re.IGNORECASE,
-                    )
-                    if match:
-                        delay = float(match.group(1)) + 1.0
-                    logger.warning(
-                        "Rate limited on stream_chat (attempt %d/%d), "
-                        "retrying in %.1fs",
-                        attempt + 1, max_retries, delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
+                if e.code == 429:
+                    err_str = str(e)
+                    is_daily = "PerDay" in err_str or "per day" in err_str.lower()
+
+                    if is_daily:
+                        logger.warning("Daily Gemini quota exhausted")
+                        yield (
+                            "\n\n*Daily API quota has been reached. "
+                            "The free tier allows 20 requests per day. "
+                            "Please try again tomorrow or add billing at "
+                            "https://ai.google.dev to increase your quota.*"
+                        )
+                        return
+
+                    if attempt < max_retries:
+                        delay = 15.0
+                        match = _re.search(
+                            r"retry in ([\d.]+)s", err_str, _re.IGNORECASE,
+                        )
+                        if match:
+                            delay = float(match.group(1)) + 1.0
+                        logger.warning(
+                            "Rate limited on stream_chat (attempt %d/%d), "
+                            "retrying in %.1fs",
+                            attempt + 1, max_retries, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
+
                 logger.exception("Gemini API error")
                 yield (
                     "\n\n*I encountered an error communicating with "
@@ -418,19 +433,26 @@ End with 1-2 follow-up questions to refine the concept."""
                 return json.loads(raw)
 
             except ClientError as e:
-                if e.code == 429 and attempt < max_retries:
-                    # Parse retry delay from error message if available
-                    delay = 15.0  # default
-                    match = _re.search(r"retry in ([\d.]+)s", str(e), _re.IGNORECASE)
-                    if match:
-                        delay = float(match.group(1)) + 1.0
-                    logger.warning(
-                        "Rate limited on render spec extraction (attempt %d/%d), "
-                        "retrying in %.1fs",
-                        attempt + 1, max_retries, delay,
-                    )
-                    await asyncio.sleep(delay)
-                    continue
+                if e.code == 429:
+                    err_str = str(e)
+                    is_daily = "PerDay" in err_str or "per day" in err_str.lower()
+
+                    if is_daily:
+                        logger.warning("Daily Gemini quota exhausted during render spec extraction")
+                        return None
+
+                    if attempt < max_retries:
+                        delay = 15.0
+                        match = _re.search(r"retry in ([\d.]+)s", err_str, _re.IGNORECASE)
+                        if match:
+                            delay = float(match.group(1)) + 1.0
+                        logger.warning(
+                            "Rate limited on render spec extraction (attempt %d/%d), "
+                            "retrying in %.1fs",
+                            attempt + 1, max_retries, delay,
+                        )
+                        await asyncio.sleep(delay)
+                        continue
                 logger.exception("Gemini API error extracting render spec")
                 return None
             except json.JSONDecodeError:
