@@ -4,7 +4,7 @@ import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
 import { ChatMessage } from "@/components/chat/chat-message";
-import { useChatWebSocket } from "@/hooks/use-chat-websocket";
+import { useChatWs } from "@/providers/chat-ws-provider";
 import type { ChatPhase } from "@/services/websocket";
 
 const PHASE_CONFIG: Record<ChatPhase, { label: string; icon: typeof Sparkles; color: string }> = {
@@ -56,7 +56,7 @@ function getPlaceholder(phase: ChatPhase, hasAnalysis: boolean): string {
     case "confirmation":
       return "Confirm to render, or request more changes...";
     case "rendering":
-      return "Video is being prepared...";
+      return "Rendering in progress. You'll be taken to the editor shortly...";
     case "editing":
       return "Describe what you'd like to change...";
   }
@@ -65,18 +65,21 @@ function getPlaceholder(phase: ChatPhase, hasAnalysis: boolean): string {
 export function ChatPanel() {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
-  const initialAnalysisSent = useRef(false);
+  const renderTriggered = useRef(false);
 
   const messages = useChatStore((s) => s.messages);
   const isStreaming = useChatStore((s) => s.isStreaming);
   const addMessage = useChatStore((s) => s.addMessage);
   const phase = useChatStore((s) => s.phase);
   const renderSpec = useChatStore((s) => s.renderSpec);
+  const initialAnalysisSent = useChatStore((s) => s.initialAnalysisSent);
+  const setInitialAnalysisSent = useChatStore((s) => s.setInitialAnalysisSent);
 
   const setView = useAudioStore((s) => s.setView);
+  const jobId = useAudioStore((s) => s.jobId);
   const analysis = useAnalysisStore((s) => s.analysis);
 
-  const { sendMessage, isConnected } = useChatWebSocket();
+  const { sendMessage, isConnected } = useChatWs();
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -89,19 +92,46 @@ export function ChatPanel() {
   // When analysis completes and we're connected, silently trigger the LLM
   // to produce its opening analysis — no fake user bubble
   useEffect(() => {
-    if (analysis && isConnected && !initialAnalysisSent.current) {
-      initialAnalysisSent.current = true;
+    if (analysis && isConnected && !initialAnalysisSent) {
+      setInitialAnalysisSent(true);
       sendMessage("Analyze this track and present your initial creative vision.");
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [analysis, isConnected]);
+  }, [analysis, isConnected, initialAnalysisSent, setInitialAnalysisSent, sendMessage]);
 
-  // When phase transitions to "rendering" and we have a render spec, navigate to editor
+  // When phase transitions to "rendering" and we have a render spec,
+  // auto-trigger the render and navigate to editor
   useEffect(() => {
-    if (phase === "rendering" && renderSpec) {
+    if (phase === "rendering" && renderSpec && !renderTriggered.current) {
+      renderTriggered.current = true;
+
+      // Trigger the render API call
+      if (jobId) {
+        fetch("/api/render/start", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            job_id: jobId,
+            render_spec: renderSpec,
+          }),
+        })
+          .then((res) => {
+            if (!res.ok) {
+              console.error("Render failed:", res.status);
+            }
+            return res.json();
+          })
+          .then((data) => {
+            if (data.render_id) {
+              console.log("Render started:", data.render_id);
+            }
+          })
+          .catch((err) => console.error("Render error:", err));
+      }
+
+      // Navigate to editor
       setView("editor");
     }
-  }, [phase, renderSpec, setView]);
+  }, [phase, renderSpec, setView, jobId]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();

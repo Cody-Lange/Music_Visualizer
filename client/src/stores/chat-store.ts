@@ -9,12 +9,14 @@ interface ChatState {
   renderSpec: RenderSpec | null;
   sessionId: string;
   phase: ChatPhase;
+  initialAnalysisSent: boolean;
 
   addMessage: (message: ChatMessage) => void;
   updateLastAssistantMessage: (content: string) => void;
   setIsStreaming: (streaming: boolean) => void;
   setRenderSpec: (spec: RenderSpec) => void;
   setPhase: (phase: ChatPhase) => void;
+  setInitialAnalysisSent: (sent: boolean) => void;
   reset: () => void;
 }
 
@@ -30,6 +32,7 @@ export const useChatStore = create<ChatState>((set) => ({
   renderSpec: null,
   sessionId: `session_${Date.now()}`,
   phase: "analysis",
+  initialAnalysisSent: false,
 
   addMessage: (message) =>
     set((state) => ({ messages: [...state.messages, message] })),
@@ -62,6 +65,8 @@ export const useChatStore = create<ChatState>((set) => ({
 
   setPhase: (phase) => set({ phase }),
 
+  setInitialAnalysisSent: (initialAnalysisSent) => set({ initialAnalysisSent }),
+
   reset: () =>
     set({
       messages: [],
@@ -69,5 +74,6 @@ export const useChatStore = create<ChatState>((set) => ({
       renderSpec: null,
       sessionId: `session_${Date.now()}`,
       phase: "analysis",
+      initialAnalysisSent: false,
     }),
 }));

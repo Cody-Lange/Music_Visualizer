@@ -1,6 +1,12 @@
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+
+def _to_camel(string: str) -> str:
+    """Convert snake_case to camelCase."""
+    components = string.split("_")
+    return components[0] + "".join(x.title() for x in components[1:])
 
 
 VisualTemplate = Literal[
@@ -27,6 +33,8 @@ VideoQuality = Literal["draft", "standard", "high"]
 
 
 class LyricsDisplayConfig(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
     enabled: bool = True
     font: Literal["sans", "serif", "mono"] = "sans"
     size: Literal["small", "medium", "large"] = "medium"
@@ -36,6 +44,8 @@ class LyricsDisplayConfig(BaseModel):
 
 
 class SectionSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
     label: str
     start_time: float
     end_time: float
@@ -50,6 +60,8 @@ class SectionSpec(BaseModel):
 
 
 class GlobalStyle(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
     template: VisualTemplate = "nebula"
     style_modifiers: list[str] = Field(default_factory=list)
     recurring_motifs: list[str] = Field(default_factory=list)
@@ -57,6 +69,8 @@ class GlobalStyle(BaseModel):
 
 
 class ExportSettings(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
     resolution: tuple[int, int] = (1920, 1080)
     fps: Literal[24, 30, 60] = 30
     aspect_ratio: AspectRatio = "16:9"
@@ -65,16 +79,22 @@ class ExportSettings(BaseModel):
 
 
 class RenderSpec(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
     global_style: GlobalStyle = Field(default_factory=GlobalStyle)
     sections: list[SectionSpec] = Field(default_factory=list)
     export_settings: ExportSettings = Field(default_factory=ExportSettings)
 
 
 class RenderRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
     job_id: str
     render_spec: RenderSpec
 
 
 class RenderEditRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, alias_generator=_to_camel)
+
     edit_description: str
     render_spec: RenderSpec | None = None
