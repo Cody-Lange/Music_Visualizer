@@ -1,4 +1,4 @@
-import { Download, Loader2 } from "lucide-react";
+import { Download, Loader2, AlertCircle, RotateCcw } from "lucide-react";
 import { useExportStore } from "@/stores/export-store";
 import { useRenderStore } from "@/stores/render-store";
 import { useAudioStore } from "@/stores/audio-store";
@@ -21,20 +21,24 @@ export function ExportPanel() {
   const exportSettings = useExportStore((s) => s.settings);
   const setPreset = useExportStore((s) => s.setPreset);
 
-  const renderId = useRenderStore((s) => s.renderId);
   const renderStatus = useRenderStore((s) => s.status);
   const percentage = useRenderStore((s) => s.percentage);
+  const renderMessage = useRenderStore((s) => s.message);
   const downloadUrl = useRenderStore((s) => s.downloadUrl);
+  const renderError = useRenderStore((s) => s.error);
   const setRenderId = useRenderStore((s) => s.setRenderId);
   const setStatus = useRenderStore((s) => s.setStatus);
   const setProgress = useRenderStore((s) => s.setProgress);
   const setDownloadUrl = useRenderStore((s) => s.setDownloadUrl);
   const setError = useRenderStore((s) => s.setError);
+  const resetRender = useRenderStore((s) => s.reset);
 
   const jobId = useAudioStore((s) => s.jobId);
   const renderSpec = useChatStore((s) => s.renderSpec);
 
-  const isRendering = renderStatus === "queued" || renderStatus === "rendering" || renderStatus === "encoding";
+  const isRendering = renderStatus === "queued" || renderStatus === "rendering" || renderStatus === "encoding" || renderStatus === "generating_keyframes";
+  const isComplete = renderStatus === "complete";
+  const isError = renderStatus === "error";
 
   const handleRender = async () => {
     if (!jobId) return;
@@ -51,6 +55,7 @@ export function ExportPanel() {
       },
     };
 
+    resetRender();
     setStatus("queued");
     setProgress(0, "Starting render...");
 
@@ -58,21 +63,20 @@ export function ExportPanel() {
       const result = await startRender(jobId, spec);
       setRenderId(result.render_id);
 
-      // Poll for status
-      const poll = async () => {
-        const status = await getRenderStatus(result.render_id);
-        setProgress(status.percentage, `Rendering... ${status.percentage}%`);
+      // The render endpoint is synchronous — by the time we get the response,
+      // the job is already complete or errored. Check status once.
+      const status = await getRenderStatus(result.render_id);
+      setProgress(status.percentage, status.percentage === 100 ? "Complete!" : `Rendering... ${status.percentage}%`);
 
-        if (status.status === "complete" && status.download_url) {
-          setDownloadUrl(status.download_url);
-        } else if (status.status === "error") {
-          setError(status.error ?? "Render failed");
-        } else if (status.status !== "complete") {
-          setTimeout(poll, 2000);
-        }
-      };
-
-      await poll();
+      if (status.status === "complete" && status.download_url) {
+        setDownloadUrl(status.download_url);
+      } else if (status.status === "error") {
+        setError(status.error ?? "Render failed");
+      } else if (status.download_url) {
+        setDownloadUrl(status.download_url);
+      } else {
+        setError("Render completed but no download URL was returned.");
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Render failed");
     }
@@ -110,16 +114,55 @@ export function ExportPanel() {
         {exportSettings.fps}fps &middot; {exportSettings.aspectRatio}
       </div>
 
-      {/* Render button */}
+      {/* Error display */}
+      {isError && (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3">
+          <div className="flex items-start gap-2">
+            <AlertCircle size={14} className="mt-0.5 shrink-0 text-red-400" />
+            <div className="min-w-0">
+              <p className="text-xs font-medium text-red-400">Render failed</p>
+              <p className="mt-0.5 text-xs text-red-400/70 break-words">
+                {renderError}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Progress bar during rendering */}
+      {isRendering && (
+        <div>
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-bg-tertiary">
+            {percentage > 0 ? (
+              <div
+                className="h-full rounded-full bg-accent transition-all duration-300"
+                style={{ width: `${percentage}%` }}
+              />
+            ) : (
+              <div className="h-full w-full animate-pulse rounded-full bg-accent/60" />
+            )}
+          </div>
+          <p className="mt-1 text-xs text-text-secondary">
+            {renderMessage || "Processing..."}
+          </p>
+        </div>
+      )}
+
+      {/* Render / Retry button */}
       <button
-        onClick={handleRender}
+        onClick={isError ? () => { resetRender(); handleRender(); } : handleRender}
         disabled={isRendering || !jobId}
         className="flex w-full items-center justify-center gap-2 rounded-lg bg-accent py-2.5 text-sm font-medium text-white hover:bg-accent-hover disabled:opacity-50"
       >
         {isRendering ? (
           <>
             <Loader2 size={16} className="animate-spin" />
-            Rendering {percentage}%
+            Rendering...
+          </>
+        ) : isError ? (
+          <>
+            <RotateCcw size={16} />
+            Retry Render
           </>
         ) : (
           <>Render Video</>
@@ -127,7 +170,7 @@ export function ExportPanel() {
       </button>
 
       {/* Download link */}
-      {downloadUrl && (
+      {isComplete && downloadUrl && (
         <a
           href={downloadUrl}
           download

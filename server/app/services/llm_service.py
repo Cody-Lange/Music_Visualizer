@@ -1,11 +1,14 @@
 """LLM service using Google Gemini Flash for thematic analysis and chat."""
 
+import asyncio
 import json
 import logging
+import re as _re
 from collections.abc import AsyncGenerator
 
 from google import genai
 from google.genai import types
+from google.genai.errors import ClientError
 
 from app.config import settings
 from app.models.chat import ChatMessage
@@ -326,6 +329,7 @@ End with 1-2 follow-up questions to refine the concept."""
     ) -> dict | None:
         """Extract a structured render spec from the conversation.
 
+        Retries up to 3 times on rate-limit (429) errors with backoff.
         Returns the parsed JSON dict or None if extraction fails.
         """
         client = self._get_client()
@@ -365,29 +369,50 @@ End with 1-2 follow-up questions to refine the concept."""
             max_output_tokens=4096,
         )
 
-        try:
-            chat = client.aio.chats.create(
-                model=settings.gemini_model,
-                history=history if history else None,
-                config=config,
-            )
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                chat = client.aio.chats.create(
+                    model=settings.gemini_model,
+                    history=history if history else None,
+                    config=config,
+                )
 
-            response = await chat.send_message(
-                last_content.parts[0].text if last_content.parts else "",
-            )
+                response = await chat.send_message(
+                    last_content.parts[0].text if last_content.parts else "",
+                )
 
-            raw = response.text.strip()
-            # Strip markdown fences if present
-            if raw.startswith("```"):
-                raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
-            if raw.endswith("```"):
-                raw = raw[: raw.rfind("```")]
-            raw = raw.strip()
+                raw = response.text.strip()
+                # Strip markdown fences if present
+                if raw.startswith("```"):
+                    raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
+                if raw.endswith("```"):
+                    raw = raw[: raw.rfind("```")]
+                raw = raw.strip()
 
-            return json.loads(raw)
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse render spec JSON from LLM response")
-            return None
-        except Exception:
-            logger.exception("Error extracting render spec")
-            return None
+                return json.loads(raw)
+
+            except ClientError as e:
+                if e.code == 429 and attempt < max_retries:
+                    # Parse retry delay from error message if available
+                    delay = 15.0  # default
+                    match = _re.search(r"retry in ([\d.]+)s", str(e), _re.IGNORECASE)
+                    if match:
+                        delay = float(match.group(1)) + 1.0
+                    logger.warning(
+                        "Rate limited on render spec extraction (attempt %d/%d), "
+                        "retrying in %.1fs",
+                        attempt + 1, max_retries, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.exception("Gemini API error extracting render spec")
+                return None
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse render spec JSON from LLM response")
+                return None
+            except Exception:
+                logger.exception("Error extracting render spec")
+                return None
+
+        return None

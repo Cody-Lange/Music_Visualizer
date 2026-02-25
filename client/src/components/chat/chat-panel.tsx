@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard } from "lucide-react";
+import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard, Play, Wand2, Pencil } from "lucide-react";
 import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
@@ -56,12 +56,40 @@ function getPlaceholder(phase: ChatPhase, hasAnalysis: boolean): string {
     case "refinement":
       return "Describe changes or ask questions...";
     case "confirmation":
-      return "Confirm to render, or request more changes...";
+      return "Use the buttons above, or type a message...";
     case "rendering":
-      return "Rendering in progress. You'll be taken to the editor shortly...";
+      return "Rendering in progress...";
     case "editing":
       return "Describe what you'd like to change...";
   }
+}
+
+function ActionButtons({ onAction }: { onAction: (text: string) => void }) {
+  return (
+    <div className="mx-auto flex max-w-md flex-wrap items-center justify-center gap-2 py-2">
+      <button
+        onClick={() => onAction("Render it")}
+        className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover"
+      >
+        <Play size={14} />
+        Render
+      </button>
+      <button
+        onClick={() => onAction("Render with AI")}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-accent bg-accent/10 px-4 py-2 text-sm font-medium text-accent transition hover:bg-accent/20"
+      >
+        <Wand2 size={14} />
+        Render with AI
+      </button>
+      <button
+        onClick={() => onAction("I'd like to make some changes")}
+        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-bg-tertiary px-4 py-2 text-sm font-medium text-text-secondary transition hover:text-text-primary hover:border-text-secondary"
+      >
+        <Pencil size={14} />
+        Keep Editing
+      </button>
+    </div>
+  );
 }
 
 export function ChatPanel() {
@@ -105,12 +133,13 @@ export function ChatPanel() {
   }, [analysis, isConnected, initialAnalysisSent, setInitialAnalysisSent, sendMessage]);
 
   // When phase transitions to "rendering" and we have a render spec,
-  // trigger the actual render and navigate to editor
+  // trigger the actual render and navigate to editor on success
   useEffect(() => {
     if (phase === "rendering" && renderSpec && !renderTriggered.current) {
       renderTriggered.current = true;
 
       if (jobId) {
+        renderStore.reset();
         renderStore.setStatus("rendering");
         renderStore.setProgress(0, "Starting render...");
 
@@ -127,7 +156,6 @@ export function ChatPanel() {
         })
           .then(async (res) => {
             if (!res.ok) {
-              // Read the error detail for debugging
               let detail = `HTTP ${res.status}`;
               try {
                 const errBody = await res.json();
@@ -141,11 +169,9 @@ export function ChatPanel() {
             if (data.render_id) {
               renderStore.setRenderId(data.render_id);
             }
-            // Use the download_url directly from render response
             if (data.download_url) {
               renderStore.setDownloadUrl(data.download_url);
             } else if (data.render_id && data.status === "complete") {
-              // Fallback: fetch the download URL
               fetch(`/api/render/${data.render_id}/download`)
                 .then((r) => r.json())
                 .then((d) => {
@@ -154,19 +180,17 @@ export function ChatPanel() {
                   }
                 });
             }
-            // Navigate to editor
             setView("editor");
           })
           .catch((err) => {
             console.error("Render error:", err);
             renderStore.setError(String(err));
             renderTriggered.current = false;
-            // Reset phase so user can retry
             setPhase("confirmation");
             addMessage({
               id: createMessageId(),
               role: "system",
-              content: `Render failed: ${err.message ?? err}. You can try again.`,
+              content: `Render failed: ${err.message ?? err}. You can try again using the buttons below.`,
               timestamp: Date.now(),
             });
           });
@@ -188,6 +212,19 @@ export function ChatPanel() {
     sendMessage(text);
     setInput("");
   }, [input, isStreaming, addMessage, sendMessage]);
+
+  const handleActionButton = useCallback((text: string) => {
+    if (isStreaming) return;
+
+    addMessage({
+      id: createMessageId(),
+      role: "user",
+      content: text,
+      timestamp: Date.now(),
+    });
+
+    sendMessage(text);
+  }, [isStreaming, addMessage, sendMessage]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -224,6 +261,11 @@ export function ChatPanel() {
           <ChatMessage key={msg.id} message={msg} />
         ))}
 
+        {/* Action buttons in confirmation phase */}
+        {phase === "confirmation" && !isStreaming && (
+          <ActionButtons onAction={handleActionButton} />
+        )}
+
         {renderSpec && phase === "rendering" && !renderStore.error && (
           <div className="mx-auto max-w-md rounded-xl border border-accent/20 bg-accent/5 p-4 text-center">
             <Clapperboard size={20} className="mx-auto mb-2 text-accent" />
@@ -231,9 +273,10 @@ export function ChatPanel() {
             <p className="mt-1 text-xs text-text-secondary">
               Template: {(renderSpec as any).globalStyle?.template ?? "—"} | {(renderSpec as any).sections?.length ?? 0} sections
             </p>
-            <div className="mt-2">
-              <Loader2 size={16} className="mx-auto animate-spin text-accent" />
+            <div className="mt-3 h-1.5 w-full overflow-hidden rounded-full bg-bg-tertiary">
+              <div className="h-full animate-pulse rounded-full bg-accent/60" style={{ width: "100%" }} />
             </div>
+            <p className="mt-2 text-xs text-text-secondary">This may take a moment...</p>
           </div>
         )}
 

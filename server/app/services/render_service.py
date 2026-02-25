@@ -309,10 +309,11 @@ class RenderService:
         if not beats:
             return None
 
+        # Limit to 50 beats to keep the geq expression within FFmpeg limits
         flash_dur = 2.0 / fps
         parts = [
             f"between(t\\,{b:.3f}\\,{b + flash_dur:.3f})"
-            for b in beats[:150]
+            for b in beats[:50]
         ]
         if not parts:
             return None
@@ -333,7 +334,10 @@ class RenderService:
         render_spec: RenderSpec,
         output_path: Path,
     ) -> dict:
-        """Simplified fallback using section-colored overlays."""
+        """Simplified fallback using section-colored overlays.
+
+        If this also fails, falls through to _minimal_render.
+        """
         duration = analysis.get("metadata", {}).get("duration", 60)
         width, height = render_spec.export_settings.resolution
         fps = render_spec.export_settings.fps
@@ -355,11 +359,51 @@ class RenderService:
             cmd, capture_output=True, text=True, timeout=600, check=False,
         )
         if result.returncode != 0:
+            logger.warning(
+                "Simple fallback render also failed, trying minimal: %s",
+                result.stderr[-300:] if result.stderr else "unknown",
+            )
+            return await self._minimal_render(
+                render_id, audio_path, duration, width, height, fps,
+                render_spec.global_style.template, output_path,
+            )
+        download_url = f"/storage/renders/{render_id}.mp4"
+        return {"download_url": download_url}
+
+    async def _minimal_render(
+        self,
+        render_id: str,
+        audio_path: str,
+        duration: float,
+        width: int,
+        height: int,
+        fps: int,
+        template: str,
+        output_path: Path,
+    ) -> dict:
+        """Ultra-simple render: solid template color + audio. Cannot fail."""
+        color = self._template_base_color(template)
+        cmd = [
+            "ffmpeg", "-y",
+            "-f", "lavfi",
+            "-i", f"color=c={color}:s={width}x{height}:d={duration}:r={fps}",
+            "-i", audio_path,
+            "-map", "0:v", "-map", "1:a",
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
+            "-movflags", "+faststart", "-shortest",
+            str(output_path),
+        ]
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=600, check=False,
+        )
+        if result.returncode != 0:
             raise RuntimeError(
-                f"Fallback render failed: "
+                f"Minimal render failed: "
                 f"{result.stderr[-200:] if result.stderr else 'unknown'}"
             )
         download_url = f"/storage/renders/{render_id}.mp4"
+        logger.info("Minimal render succeeded: %s", render_id)
         return {"download_url": download_url}
 
     def _simple_section_filters(
