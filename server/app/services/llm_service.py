@@ -199,81 +199,43 @@ IMPORTANT:
 - Fill in ALL fields based on what was discussed."""
 
 # The shader generation system prompt — this is the core of the visual engine.
-# Based on ShaderGen (arxiv 2512.08951) and Shadertoy best practices.
 # NOTE: This is a plain string (NOT an f-string), so use single { } for GLSL.
 SHADER_SYSTEM_PROMPT = """\
-You are a legendary demoscene artist and Shadertoy programmer. Your GLSL \
-shaders have won competitions for their stunning beauty, technical \
-sophistication, and musical responsiveness. You create art that lives at \
-the intersection of mathematics, music, and visual poetry.
+You are a legendary demoscene artist and Shadertoy programmer. You create \
+stunning audio-reactive GLSL shaders — raymarched worlds, fractal \
+nebulae, infinite geometric corridors, bioluminescent forms, particle \
+galaxies, flowing noise fields. Your work is pure visual poetry driven \
+by mathematics and music.
 
-You write a single GLSL fragment shader function:
-  void mainImage(out vec4 fragColor, in vec2 fragCoord)
-You may include any number of helper functions above mainImage.
+## SETUP
 
-## UNIFORMS (already declared — do NOT redeclare)
+Your code is inserted into a #version 330 wrapper that already declares \
+all uniforms, `out vec4 fragColor`, and `void main()`. You output ONLY \
+helper functions + `void mainImage(out vec4 fragColor, in vec2 fragCoord)`.
 
-uniform float iTime;              // elapsed seconds
-uniform vec2  iResolution;        // viewport pixels
-uniform float u_bass;             // bass band energy       [0,1]
-uniform float u_lowMid;           // low-mid band energy    [0,1]
-uniform float u_mid;              // mid band energy        [0,1]
-uniform float u_highMid;          // high-mid band energy   [0,1]
-uniform float u_treble;           // treble band energy     [0,1]
-uniform float u_energy;           // overall RMS amplitude  [0,1]
-uniform float u_beat;             // beat pulse intensity    [0,1]
-uniform float u_spectralCentroid; // spectral brightness    [0,1]
+Available uniforms (do not redeclare):
+  iTime, iResolution, u_bass, u_lowMid, u_mid, u_highMid,
+  u_treble, u_energy, u_beat, u_spectralCentroid
+All audio uniforms are in [0,1]. No textures/samplers available.
 
-## AESTHETIC DEFAULTS — Smooth & Cinematic
+## AUDIO MAPPING
 
-- Multiply audio uniforms by 0.1-0.4 for gentle modulation.
-- Beat sync: smoothstep or pow, not raw values.
-- Gradual color shifts, no strobing.
+- u_bass → radius pulsing, domain warping (scale 0.2-0.4)
+- u_mid → color/pattern modulation
+- u_treble → fine detail, shimmer (scale 0.1-0.3)
+- u_beat → bloom via smoothstep(0.0, 1.0, u_beat)
+- u_energy → overall brightness
+- u_spectralCentroid → color temperature (low=warm, high=cool)
 
-## AUDIO-VISUAL MAPPING
+## TECHNIQUES YOU CAN USE
 
-- u_bass:  radius pulsing, domain warping (scale 0.2-0.4)
-- u_mid:   color modulation, pattern density
-- u_treble: fine detail, shimmer (scale 0.1-0.3)
-- u_beat:  smooth bloom via smoothstep(0.0, 1.0, u_beat)
-- u_energy: overall brightness, glow
-- u_spectralCentroid: color temperature (low=warm, high=cool)
+Raymarching, SDFs (sphere, box, torus, smooth union, domain repetition), \
+fractals (Mandelbulb, Julia, IFS), noise (fbm, Voronoi, curl, domain \
+warping), polar transforms, tunnels, flow fields, particle hash grids, \
+iq palettes, Blinn-Phong, Fresnel, bloom, vignette — anything \
+expressible in pure math.
 
-## TECHNIQUES
-
-You have the full Shadertoy arsenal:
-- Raymarching + SDFs (sphere, box, torus, smooth-union, domain rep)
-- Fractals (Mandelbulb, Julia, IFS, Menger sponge)
-- Noise (Perlin, fbm, Voronoi, domain warping, curl noise)
-- 2D (polar transforms, tunnels, flow fields, Lissajous)
-- Rendering (iq palette, Blinn-Phong, Fresnel, bloom, vignette)
-- Particles (hash grids, glow accumulation)
-
-## ABSOLUTE RULES (#version 330)
-
-Your code is injected into a wrapper that provides #version 330, \
-precision, all uniforms, out vec4 fragColor, and void main(). \
-You provide ONLY helper functions + mainImage.
-
-1.  NO texture/iChannel/sampler2D/dFdx/dFdy/fwidth
-2.  ALL float literals need a decimal point: 1.0 not 1
-3.  Return types MUST match function signature exactly: \
-    float functions return float, vec3 functions return vec3
-4.  void functions: use `return;` — NEVER `return void;` or \
-    `return void(...);`
-5.  Do NOT redeclare uniforms/out vec4 fragColor/void main()
-6.  No #version or precision directives
-7.  Every statement ends with a semicolon — especially the \
-    last statement before a closing brace }
-8.  for-loop bounds must be compile-time constants
-9.  Function calls MUST match the defined signature \
-    (same number and types of arguments)
-10. NEVER call a function with (void) — use empty parens ()
-11. Every function you CALL must be DEFINED above the call site
-12. Keep total shader under 120 lines for reliability
-13. Match ALL parentheses and braces — count them carefully
-
-## WORKING EXAMPLE (raymarched scene)
+## EXAMPLE 1 — Raymarched Sphere
 
 vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
     return a + b * cos(6.28318 * (c * t + d));
@@ -284,9 +246,7 @@ float sdSphere(vec3 p, float r) {
 }
 
 float scene(vec3 p) {
-    float sphere = sdSphere(p, 1.0 + u_bass * 0.3);
-    float ground = p.y + 1.0;
-    return min(sphere, ground);
+    return sdSphere(p, 1.0 + u_bass * 0.3);
 }
 
 vec3 getNormal(vec3 p) {
@@ -294,23 +254,21 @@ vec3 getNormal(vec3 p) {
     return normalize(vec3(
         scene(p + e.xyy) - scene(p - e.xyy),
         scene(p + e.yxy) - scene(p - e.yxy),
-        scene(p + e.yyx) - scene(p - e.yyx)
-    ));
+        scene(p + e.yyx) - scene(p - e.yyx)));
 }
 
 void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
-    vec3 ro = vec3(0.0, 0.0, -3.0 + u_energy * 0.5);
+    vec3 ro = vec3(0.0, 0.0, -3.0);
     vec3 rd = normalize(vec3(uv, 1.5));
     float t = 0.0;
     for (int i = 0; i < 64; i++) {
-        vec3 p = ro + rd * t;
-        float d = scene(p);
+        float d = scene(ro + rd * t);
         if (d < 0.001) break;
         t += d;
         if (t > 20.0) break;
     }
-    vec3 col = vec3(0.0);
+    vec3 col = vec3(0.02);
     if (t < 20.0) {
         vec3 p = ro + rd * t;
         vec3 n = getNormal(p);
@@ -320,10 +278,61 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
             vec3(0.0, 0.15, 0.2)) * diff;
         col += vec3(0.15) * smoothstep(0.0, 1.0, u_beat);
     }
-    col += vec3(0.02) * u_treble;
-    col *= 1.0 - smoothstep(0.4, 1.4, length(uv));
+    col *= 1.0 - 0.4 * length(uv);
     fragColor = vec4(col, 1.0);
 }
+
+## EXAMPLE 2 — fbm Noise Landscape
+
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+        mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+        mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), f.x),
+        f.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 5; i++) {
+        v += a * noise(p);
+        p *= 2.0;
+        a *= 0.5;
+    }
+    return v;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = uv * 6.0;
+    p.x += iTime * 0.2;
+    p += fbm(p * 0.8 + iTime * 0.1) * (0.5 + u_bass * 0.8);
+    float n = fbm(p + u_mid * 2.0);
+    float n2 = fbm(p * 2.0 - iTime * 0.3);
+    vec3 col = mix(
+        vec3(0.1, 0.2, 0.5),
+        vec3(0.9, 0.4, 0.1),
+        n + u_spectralCentroid * 0.3);
+    col += vec3(0.6, 0.3, 0.8) * n2 * u_treble * 2.0;
+    col += vec3(0.2) * smoothstep(0.0, 1.0, u_beat);
+    col *= 0.8 + 0.4 * u_energy;
+    fragColor = vec4(col, 1.0);
+}
+
+## RULES
+
+1. Use float literals with decimals: 1.0, 0.5, 3.14159
+2. Define helper functions ABOVE where they are called
+3. Every statement ends with a semicolon
+4. for-loop bounds must be compile-time constants
+5. float functions return float, vec3 functions return vec3
 
 ## OUTPUT
 
@@ -355,28 +364,65 @@ _RE_VOID_MAIN = _re.compile(
     r"[^}]*\}",
     _re.DOTALL,
 )
-# `return void;` or `return void(...)` — void is not a value in GLSL
-_RE_RETURN_VOID = _re.compile(r"\breturn\s+void\s*(?:\([^)]*\)\s*)?;")
 # Double braces {{ or }} that the LLM may copy from prompt examples
 _RE_DOUBLE_BRACE_OPEN = _re.compile(r"\{\{")
 _RE_DOUBLE_BRACE_CLOSE = _re.compile(r"\}\}")
-# Function CALL with (void) argument — e.g. `foo(void)` → `foo()`
-# Only matches calls, not declarations (declarations have a type before the name)
-_RE_VOID_CALL = _re.compile(r"(\w+\s*\(\s*)void(\s*\))")
 
 _logger = logging.getLogger(__name__)
 
 
-def _fix_missing_semicolons(code: str) -> str:
-    """Insert missing semicolons before void/float/vec/int/mat
-    function declarations.
+def _strip_void_expressions(code: str) -> str:
+    """Remove all void-as-expression patterns from GLSL code.
 
-    The LLM often forgets the semicolon at the end of the last
-    statement in a function body, so the next function declaration
-    (starting with ``void``, ``float``, ``vec3``, etc.) becomes a
-    syntax error like "unexpected VOID, expecting SEMICOLON".
+    NVIDIA GLSL compilers reject ``void(expr)``, ``void()``,
+    ``return void;``, and ``func(void)`` with "cannot construct
+    this type" — even though Mesa accepts them.  This function
+    aggressively strips ALL such patterns line-by-line so the shader
+    is cross-driver compatible.
     """
-    # GLSL type keywords that can start a function declaration
+    lines = code.split("\n")
+    fixed: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+
+        # ── Keep function declarations: `void funcName(...)` ─────
+        # These are the ONLY valid use of `void` at line-start
+        # followed by an identifier + paren.
+        if _re.match(r"^void\s+\w+\s*\(", stripped):
+            fixed.append(line)
+            continue
+
+        # ── Remove standalone void expression statements ─────────
+        # Lines like: `void();`  `void(1.0);`  `void(someExpr);`
+        if _re.match(r"^\s*void\s*\([^)]*\)\s*;?\s*$", stripped):
+            _logger.debug("Stripped void expression: %s", stripped)
+            continue
+
+        # ── Fix `return void;` → `return;` ──────────────────────
+        line = _re.sub(
+            r"\breturn\s+void\s*(?:\([^)]*\)\s*)?;",
+            "return;",
+            line,
+        )
+
+        # ── Fix `func(void)` calls → `func()` ──────────────────
+        # In GLSL, void as a function argument is invalid in calls.
+        line = _re.sub(r"(\w+\s*\(\s*)void(\s*\))", r"\1\2", line)
+
+        # ── Fix void cast in expression: `void(expr)` → `expr` ──
+        # e.g., `x = void(y);` → `x = y;`
+        line = _re.sub(r"\bvoid\s*\(([^)]+)\)", r"\1", line)
+
+        fixed.append(line)
+    return "\n".join(fixed)
+
+
+def _fix_missing_semicolons(code: str) -> str:
+    """Insert missing semicolons before function declarations.
+
+    The LLM often omits the semicolon on the last statement before a
+    new top-level function, causing "unexpected VOID/FLOAT" errors.
+    """
     type_keywords = {
         "void", "float", "int", "vec2", "vec3", "vec4",
         "mat2", "mat3", "mat4", "bool", "ivec2", "ivec3", "ivec4",
@@ -387,30 +433,21 @@ def _fix_missing_semicolons(code: str) -> str:
         fixed.append(line)
         if i + 1 >= len(lines):
             continue
-        # Check if next line starts a top-level function declaration
         next_stripped = lines[i + 1].lstrip()
         next_first_word = next_stripped.split("(")[0].split()
         if not next_first_word:
             continue
-        # A top-level declaration looks like: "void funcName(" or
-        # "float funcName(" at column 0
         if (
             lines[i + 1]
             and not lines[i + 1][0].isspace()
             and next_first_word[0] in type_keywords
             and "(" in lines[i + 1]
         ):
-            # Check if current line looks like it's missing a terminator
             cur_stripped = line.rstrip()
             if cur_stripped and cur_stripped[-1] not in (
                 ";", "{", "}", "/", "*", ",", "(", ")",
             ):
-                # Insert semicolon at the end of current line
                 fixed[-1] = line.rstrip() + ";"
-                _logger.debug(
-                    "Inserted missing semicolon at line %d: %s",
-                    i + 1, fixed[-1].strip(),
-                )
     return "\n".join(fixed)
 
 
@@ -421,9 +458,8 @@ def sanitize_shader_code(raw: str) -> str:
     - Markdown fences
     - Duplicate uniform / out / #version / precision declarations
     - Wrapper void main() that the host already provides
-    - ``return void;`` and ``return void(...);``
+    - ALL void-as-expression patterns (NVIDIA compat)
     - Double braces ``{{`` / ``}}``
-    - ``func(void)`` calls → ``func()``
     - Missing semicolons before function declarations
     - Stray backslash line continuations
     """
@@ -448,12 +484,10 @@ def sanitize_shader_code(raw: str) -> str:
     # ── Strip void main() wrapper ────────────────────────────
     code = _RE_VOID_MAIN.sub("", code)
 
-    # ── Fix `return void;` / `return void(0);` → `return;` ──
-    code = _RE_RETURN_VOID.sub("return;", code)
-
-    # ── Fix `func(void)` calls → `func()` ───────────────────
-    # Only replace when it's clearly a call (no type keyword before)
-    code = _RE_VOID_CALL.sub(r"\1\2", code)
+    # ── Fix ALL void-as-expression patterns ──────────────────
+    # This is the big one: NVIDIA rejects void(expr), void(),
+    # return void;, func(void) — even though Mesa accepts them.
+    code = _strip_void_expressions(code)
 
     # ── Fix double braces {{ → { and }} → } ─────────────────
     code = _RE_DOUBLE_BRACE_OPEN.sub("{", code)
@@ -751,14 +785,19 @@ End with 1-2 follow-up questions to refine the concept."""
                     config=config,
                 )
                 raw = response.text.strip()
-                logger.debug(
-                    "Raw LLM shader output (%d chars):\n%s",
-                    len(raw), raw[:2000],
-                )
                 sanitized = sanitize_shader_code(raw)
-                logger.debug(
-                    "Sanitized shader (%d chars):\n%s",
-                    len(sanitized), sanitized[:2000],
+                # Log first 40 lines at INFO so compilation failures
+                # can be diagnosed from server output.
+                preview = "\n".join(
+                    sanitized.splitlines()[:40],
+                )
+                logger.info(
+                    "Generated shader (%d lines, %d chars):\n%s%s",
+                    len(sanitized.splitlines()),
+                    len(sanitized),
+                    preview,
+                    "\n..." if len(sanitized.splitlines()) > 40
+                    else "",
                 )
                 return sanitized
             except ClientError as e:
@@ -804,23 +843,18 @@ End with 1-2 follow-up questions to refine the concept."""
             "fragment shader.\n\n"
             f"Visual concept: {description}\n"
             f"Mood: {mood_str}{color_hint}\n\n"
-            "Use advanced techniques (raymarching, SDFs, "
-            "fractals, fbm noise, etc.) appropriate to the "
-            "description. Every audio uniform should drive "
-            "some visual parameter.\n\n"
-            "CRITICAL SYNTAX REMINDERS:\n"
-            "- Every statement MUST end with a semicolon\n"
-            "- NEVER write `return void;` — use `return;`\n"
-            "- NEVER call a function with void: "
-            "`foo(void)` is INVALID in GLSL — use `foo()`\n"
-            "- Every function you call must be defined "
-            "ABOVE the call site\n"
-            "- float functions MUST return float, "
-            "vec3 functions MUST return vec3\n\n"
-            "Output ONLY GLSL code. No markdown, no "
-            "explanation, no uniform declarations."
+            "Use advanced techniques appropriate to the "
+            "concept — raymarching, SDFs, fractals, fbm "
+            "noise, domain warping, Voronoi, particle "
+            "fields, polar transforms, flow fields, "
+            "whatever best serves the visual. Use hundreds "
+            "or thousands of points/iterations if it "
+            "makes the image more beautiful.\n\n"
+            "Every audio uniform should drive some visual "
+            "parameter. Make it breathtaking.\n\n"
+            "Output ONLY GLSL code."
         )
-        return await self._call_shader_llm(prompt, temperature=0.75)
+        return await self._call_shader_llm(prompt, temperature=0.85)
 
     async def fix_shader(
         self,
