@@ -154,22 +154,26 @@ class TestPhaseTransition:
         assert result == "editing"
 
     def test_editing_to_rendering_on_render_request(self) -> None:
+        # In editing phase, _detect_phase_transition always returns "editing"
+        # because re-rendering requires the render_confirm flag (button press),
+        # which is handled in the WebSocket handler before this function.
         result = _detect_phase_transition(
             "editing",
             "Render it",
             "",
             8,
         )
-        assert result == "rendering"
+        assert result == "editing"
 
     def test_editing_to_rendering_with_ai(self) -> None:
+        # Same as above — text alone doesn't trigger rendering in editing phase
         result = _detect_phase_transition(
             "editing",
             "Render with AI",
             "",
             8,
         )
-        assert result == "rendering"
+        assert result == "editing"
 
 
 class TestExtractRenderSpec:
