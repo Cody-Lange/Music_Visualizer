@@ -310,11 +310,16 @@ class RenderService:
             return None
 
         # Limit to 50 beats to keep the geq expression within FFmpeg limits.
-        # Commas are safe here — the expression is inside single quotes in the
-        # geq filter, so FFmpeg's filter parser won't split on them.
+        #
+        # Two critical details for geq expressions:
+        #   1. Time variable is T (uppercase), NOT t — geq has its own
+        #      variable namespace separate from the general 'enable' context.
+        #   2. Commas inside geq expressions are misinterpreted as filter
+        #      chain separators regardless of quoting.  Use comparison
+        #      operators instead: (T>=a)*(T<=b) ≡ between(T,a,b).
         flash_dur = 2.0 / fps
         parts = [
-            f"between(t,{b:.3f},{b + flash_dur:.3f})"
+            f"(T>={b:.3f})*(T<={b + flash_dur:.3f})"
             for b in beats[:50]
         ]
         if not parts:

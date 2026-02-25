@@ -91,6 +91,17 @@ class TestFullFilterGraph:
         assert "beat_fl" in filt
         assert "blend" in filt
 
+    def test_beat_flash_uses_comparison_operators(self):
+        """Beat flash must use (T>=a)*(T<=b) — no commas, uppercase T for geq."""
+        result = self.service._beat_flash([1.0, 2.5], 10.0, 1920, 1080, 30)
+        assert result is not None
+        assert "geq" in result
+        # Must use uppercase T (geq variable) not lowercase t (enable variable)
+        assert "(T>=" in result
+        assert "(T<=" in result
+        # Must not contain between() — commas break FFmpeg filter parsing
+        assert "between" not in result
+
 
 class TestProceduralEffect:
     """Tests for template-specific procedural effects."""
