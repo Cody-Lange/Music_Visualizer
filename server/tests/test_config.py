@@ -38,7 +38,11 @@ class TestSettings:
         assert keyframe_dir.name == "keyframes"
 
     def test_defaults(self):
-        s = Settings()
+        s = Settings(
+            _env_file=None,
+            google_ai_api_key="",
+            genius_api_token="",
+        )
         assert s.redis_url == "redis://localhost:6379/0"
         assert s.storage_backend == "local"
         assert s.max_upload_size_mb == 50
