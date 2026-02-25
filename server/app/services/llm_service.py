@@ -200,6 +200,7 @@ IMPORTANT:
 
 # The shader generation system prompt — this is the core of the visual engine.
 # Based on ShaderGen (arxiv 2512.08951) and Shadertoy best practices.
+# NOTE: This is a plain string (NOT an f-string), so use single { } for GLSL.
 SHADER_SYSTEM_PROMPT = """\
 You are a legendary demoscene artist and Shadertoy programmer. Your GLSL \
 shaders have won competitions for their stunning beauty, technical \
@@ -257,56 +258,56 @@ You provide ONLY helper functions + mainImage.
 1.  NO texture/iChannel/sampler2D/dFdx/dFdy/fwidth
 2.  ALL float literals need a decimal point: 1.0 not 1
 3.  Return types MUST match function signature exactly
-4.  void functions: use `return;` — NEVER `return void;`
+4.  void functions: use `return;` — NEVER `return void;` or `return void(...);`
 5.  Do NOT redeclare uniforms/out vec4 fragColor/void main()
 6.  No #version or precision directives
-7.  Match ALL parentheses and braces — count them
+7.  Match ALL parentheses and braces — count them carefully
 8.  for-loop bounds must be compile-time constants
 9.  Function calls MUST match the defined signature \
     (same number and types of arguments)
 10. NEVER pass an int where a float is expected
+11. Every function you CALL must be DEFINED above the call site
+12. Keep total shader under 120 lines for reliability
 
-## WORKING EXAMPLE (raymarched scene — 60 lines)
+## WORKING EXAMPLE (raymarched scene)
 
-```
-vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {{
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
     return a + b * cos(6.28318 * (c * t + d));
-}}
+}
 
-float sdSphere(vec3 p, float r) {{
+float sdSphere(vec3 p, float r) {
     return length(p) - r;
-}}
+}
 
-float scene(vec3 p) {{
+float scene(vec3 p) {
     float sphere = sdSphere(p, 1.0 + u_bass * 0.3);
     float ground = p.y + 1.0;
     return min(sphere, ground);
-}}
+}
 
-vec3 getNormal(vec3 p) {{
+vec3 getNormal(vec3 p) {
     vec2 e = vec2(0.001, 0.0);
     return normalize(vec3(
         scene(p + e.xyy) - scene(p - e.xyy),
         scene(p + e.yxy) - scene(p - e.yxy),
         scene(p + e.yyx) - scene(p - e.yyx)
     ));
-}}
+}
 
-void mainImage(out vec4 fragColor, in vec2 fragCoord) {{
-    vec2 uv = (fragCoord * 2.0 - iResolution.xy) \
-/ min(iResolution.x, iResolution.y);
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
     vec3 ro = vec3(0.0, 0.0, -3.0 + u_energy * 0.5);
     vec3 rd = normalize(vec3(uv, 1.5));
     float t = 0.0;
-    for (int i = 0; i < 64; i++) {{
+    for (int i = 0; i < 64; i++) {
         vec3 p = ro + rd * t;
         float d = scene(p);
         if (d < 0.001) break;
         t += d;
         if (t > 20.0) break;
-    }}
+    }
     vec3 col = vec3(0.0);
-    if (t < 20.0) {{
+    if (t < 20.0) {
         vec3 p = ro + rd * t;
         vec3 n = getNormal(p);
         float diff = max(dot(n, normalize(vec3(1.0, 1.0, -1.0))), 0.0);
@@ -314,12 +315,11 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {{
             vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4),
             vec3(0.0, 0.15, 0.2)) * diff;
         col += vec3(0.15) * smoothstep(0.0, 1.0, u_beat);
-    }}
+    }
     col += vec3(0.02) * u_treble;
     col *= 1.0 - smoothstep(0.4, 1.4, length(uv));
     fragColor = vec4(col, 1.0);
-}}
-```
+}
 
 ## OUTPUT
 
@@ -328,57 +328,79 @@ no explanation. Helper functions first, then mainImage.\
 """
 
 
-# Regex patterns for sanitising LLM-generated shader code
-_RE_MARKDOWN_FENCE = _re.compile(r"^```(?:glsl|hlsl|c|cpp)?\s*\n?", _re.MULTILINE)
+# ── Regex patterns for sanitising LLM-generated shader code ──────────
+_RE_MARKDOWN_FENCE = _re.compile(
+    r"^```(?:glsl|hlsl|c|cpp)?\s*\n?", _re.MULTILINE,
+)
 _RE_MARKDOWN_CLOSE = _re.compile(r"\n?```\s*$")
 _RE_VERSION = _re.compile(r"^\s*#\s*version\s+.*$", _re.MULTILINE)
-_RE_PRECISION = _re.compile(r"^\s*precision\s+\w+\s+float\s*;.*$", _re.MULTILINE)
+_RE_PRECISION = _re.compile(
+    r"^\s*precision\s+\w+\s+float\s*;.*$", _re.MULTILINE,
+)
 _RE_UNIFORM = _re.compile(
-    r"^\s*uniform\s+\w+\s+(?:iTime|iResolution|u_bass|u_lowMid|u_mid|u_highMid|u_treble|u_energy|u_beat|u_spectralCentroid)\s*;.*$",
+    r"^\s*uniform\s+\w+\s+"
+    r"(?:iTime|iResolution|u_bass|u_lowMid|u_mid|u_highMid"
+    r"|u_treble|u_energy|u_beat|u_spectralCentroid)\s*;.*$",
     _re.MULTILINE,
 )
-_RE_OUT_FRAGCOLOR = _re.compile(r"^\s*out\s+vec4\s+fragColor\s*;.*$", _re.MULTILINE)
+_RE_OUT_FRAGCOLOR = _re.compile(
+    r"^\s*out\s+vec4\s+fragColor\s*;.*$", _re.MULTILINE,
+)
 _RE_VOID_MAIN = _re.compile(
-    r"void\s+main\s*\(\s*\)\s*\{[^}]*mainImage\s*\([^)]*\)\s*;[^}]*\}",
+    r"void\s+main\s*\(\s*\)\s*\{[^}]*mainImage\s*\([^)]*\)\s*;"
+    r"[^}]*\}",
     _re.DOTALL,
 )
 # `return void;` or `return void(...)` — void is not a value in GLSL
-_RE_RETURN_VOID = _re.compile(r"\breturn\s+void\b")
+_RE_RETURN_VOID = _re.compile(r"\breturn\s+void\s*(?:\([^)]*\)\s*)?;")
+# Double braces {{ or }} that the LLM may copy from the prompt example
+_RE_DOUBLE_BRACE_OPEN = _re.compile(r"\{\{")
+_RE_DOUBLE_BRACE_CLOSE = _re.compile(r"\}\}")
 
 
 def sanitize_shader_code(raw: str) -> str:
     """Clean up common LLM mistakes in generated GLSL code.
 
-    Strips markdown fences, duplicate uniform/out declarations, #version
-    directives, precision qualifiers, wrapper ``void main()`` functions
-    that the shader wrapper already provides, and ``return void`` which
-    is not valid GLSL.
+    Handles:
+    - Markdown fences
+    - Duplicate uniform / out / #version / precision declarations
+    - Wrapper void main() that the host already provides
+    - ``return void;`` and ``return void(...);``
+    - Double braces ``{{`` / ``}}`` (LLM copying from prompt examples)
+    - Stray backslash line continuations (not valid GLSL)
     """
     code = raw.strip()
 
-    # Strip markdown fences
+    # ── Strip markdown fences ────────────────────────────────
     code = _RE_MARKDOWN_FENCE.sub("", code)
     code = _RE_MARKDOWN_CLOSE.sub("", code)
 
-    # Strip #version directive (wrapper adds it)
+    # ── Strip #version directive (wrapper adds it) ───────────
     code = _RE_VERSION.sub("", code)
 
-    # Strip precision qualifier (wrapper adds it)
+    # ── Strip precision qualifier (wrapper adds it) ──────────
     code = _RE_PRECISION.sub("", code)
 
-    # Strip redeclared uniforms
+    # ── Strip redeclared uniforms ────────────────────────────
     code = _RE_UNIFORM.sub("", code)
 
-    # Strip duplicate `out vec4 fragColor;`
+    # ── Strip duplicate `out vec4 fragColor;` ────────────────
     code = _RE_OUT_FRAGCOLOR.sub("", code)
 
-    # Strip void main() wrapper that calls mainImage (wrapper provides this)
+    # ── Strip void main() wrapper ────────────────────────────
     code = _RE_VOID_MAIN.sub("", code)
 
-    # Fix `return void;` → `return;` (void is not a value)
-    code = _RE_RETURN_VOID.sub("return", code)
+    # ── Fix `return void;` / `return void(0);` → `return;` ──
+    code = _RE_RETURN_VOID.sub("return;", code)
 
-    # Collapse excessive blank lines
+    # ── Fix double braces {{ → { and }} → } ─────────────────
+    code = _RE_DOUBLE_BRACE_OPEN.sub("{", code)
+    code = _RE_DOUBLE_BRACE_CLOSE.sub("}", code)
+
+    # ── Strip stray backslash line continuations ─────────────
+    code = _re.sub(r"\\\n", "\n", code)
+
+    # ── Collapse excessive blank lines ───────────────────────
     code = _re.sub(r"\n{3,}", "\n\n", code)
 
     return code.strip()
@@ -723,42 +745,97 @@ End with 1-2 follow-up questions to refine the concept."""
         compile_error: str,
         description: str,
     ) -> str | None:
-        """Ask the LLM to fix a broken shader, giving it the error."""
-        # Extract the line number from the error so the LLM can focus
-        line_match = _re.search(r"ERROR:\s*0:(\d+):", compile_error)
-        line_hint = ""
-        if line_match:
-            err_line = int(line_match.group(1))
-            # The wrapper adds ~16 lines before user code
+        """Ask the LLM to fix a broken shader while preserving its
+        visual quality.
+
+        The prompt references the *original description* so the LLM
+        remembers what it's supposed to depict, and pinpoints the exact
+        error location.
+        """
+        # ── Extract line numbers from ALL errors ─────────────
+        error_lines: list[int] = []
+        for m in _re.finditer(r"ERROR:\s*0:(\d+):", compile_error):
+            err_line = int(m.group(1))
+            # The wrapper prepends exactly 16 lines
             user_line = max(1, err_line - 16)
-            lines = previous_code.splitlines()
-            start = max(0, user_line - 3)
-            end = min(len(lines), user_line + 3)
-            context_lines = "\n".join(
-                f"{'>>>' if i + 1 == user_line else '   '} "
-                f"{i + 1}: {lines[i]}"
-                for i in range(start, end)
+            error_lines.append(user_line)
+
+        lines = previous_code.splitlines()
+        line_hint = ""
+        if error_lines:
+            # Show context around each error line (deduplicated)
+            shown: set[int] = set()
+            snippets: list[str] = []
+            for user_line in dict.fromkeys(error_lines):
+                start = max(0, user_line - 3)
+                end = min(len(lines), user_line + 4)
+                snippet = "\n".join(
+                    f"{'>>>' if i + 1 == user_line else '   '} "
+                    f"{i + 1}: {lines[i]}"
+                    for i in range(start, end)
+                    if i not in shown
+                )
+                shown.update(range(start, end))
+                if snippet:
+                    snippets.append(snippet)
+            if snippets:
+                line_hint = (
+                    "\nError location(s) in your code:\n"
+                    + "\n---\n".join(snippets)
+                    + "\n"
+                )
+
+        # Classify the error type for more targeted advice
+        error_lower = compile_error.lower()
+        specific_advice = ""
+        if "undeclared identifier" in error_lower:
+            # Extract the identifier name
+            id_match = _re.search(
+                r"'(\w+)'\s*:\s*undeclared identifier",
+                compile_error,
             )
-            line_hint = (
-                f"\nThe error is near line {user_line} of your "
-                f"code:\n```\n{context_lines}\n```\n"
+            if id_match:
+                ident = id_match.group(1)
+                specific_advice = (
+                    f"The identifier '{ident}' is used but never "
+                    f"defined. Either:\n"
+                    f"- You forgot to define the function '{ident}' "
+                    f"above where it's called\n"
+                    f"- You defined it with a different name "
+                    f"(typo in the name)\n"
+                    f"- The definition was accidentally removed\n"
+                    f"Make sure every function is DEFINED "
+                    f"ABOVE its first use.\n\n"
+                )
+        elif "cannot construct this type" in error_lower:
+            specific_advice = (
+                "You wrote `return void;` or `return void(...)`. "
+                "In void functions, just use `return;` with "
+                "no value.\n\n"
+            )
+        elif "cannot convert return value" in error_lower:
+            specific_advice = (
+                "A function's return statement has the wrong "
+                "type. Check that float functions return float, "
+                "vec3 functions return vec3, etc. Use explicit "
+                "constructors like float(...) or vec3(...).\n\n"
             )
 
         prompt = (
-            "The following shader FAILED to compile. Fix it.\n\n"
-            f"Compiler error:\n{compile_error}\n"
+            f"This shader was meant to depict: {description}\n\n"
+            f"It FAILED to compile with this error:\n"
+            f"{compile_error}\n"
             f"{line_hint}\n"
-            f"Broken shader:\n```glsl\n{previous_code}\n```\n\n"
-            "REMEMBER: The wrapper already provides #version 330, "
-            "all uniforms, out vec4 fragColor, and void main(). "
-            "Do NOT redeclare any of those.\n\n"
-            "Common causes:\n"
-            "- Mismatched () or {{}} in a helper function\n"
-            "- `return void;` instead of `return;`\n"
-            "- Function call with wrong argument types\n"
-            "- Integer literal where float is needed\n\n"
+            f"{specific_advice}"
+            f"Broken shader:\n{previous_code}\n\n"
+            "Fix ONLY the compilation error(s). Preserve "
+            "all the visual quality, effects, and audio "
+            "reactivity of the original shader.\n\n"
+            "REMEMBER: The wrapper provides #version 330, "
+            "all uniforms, out vec4 fragColor, and void "
+            "main(). Do NOT redeclare those.\n\n"
             "Output ONLY the complete corrected GLSL code. "
-            "No markdown, no explanation."
+            "No markdown fences, no explanation."
         )
         return await self._call_shader_llm(prompt, temperature=0.4)
 
@@ -767,22 +844,24 @@ End with 1-2 follow-up questions to refine the concept."""
         description: str,
         mood_tags: list[str] | None = None,
     ) -> str | None:
-        """Generate a simpler shader as a last-resort attempt.
+        """Generate a fresh shader with emphasis on compilability.
 
-        Asks the LLM for a clean 2D effect (no raymarching) that is
-        easy to compile correctly.
+        Still aims for visual beauty — uses the full description and
+        mood — but steers toward techniques less prone to syntax errors.
         """
         mood_str = (
             ", ".join(mood_tags) if mood_tags else "energetic, dynamic"
         )
         prompt = (
-            "Create a beautiful 2D audio-reactive GLSL shader.\n\n"
-            f"Theme: {description}\n"
+            f"Create a stunning audio-reactive GLSL shader.\n\n"
+            f"Visual concept: {description}\n"
             f"Mood: {mood_str}\n\n"
-            "Use ONLY 2D techniques: polar coordinates, domain "
-            "warping, fbm noise, iq palette, sin/cos patterns. "
-            "NO raymarching, NO SDFs, NO 3D. Keep it under 50 "
-            "lines. Focus on getting it to compile correctly.\n\n"
+            "Use visually impressive techniques: domain "
+            "warping, fbm noise, iq palette, polar distortion, "
+            "Voronoi, layered sin patterns, flow fields, "
+            "tunnel effects. Keep under 80 lines.\n\n"
+            "Every audio uniform should drive a visual "
+            "parameter. Make it look gorgeous.\n\n"
             "Output ONLY GLSL code. No markdown."
         )
-        return await self._call_shader_llm(prompt, temperature=0.5)
+        return await self._call_shader_llm(prompt, temperature=0.6)
