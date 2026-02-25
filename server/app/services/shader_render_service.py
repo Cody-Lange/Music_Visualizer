@@ -10,6 +10,7 @@ import logging
 import math
 import struct
 import subprocess
+import tempfile
 from pathlib import Path
 
 import numpy as np
@@ -135,6 +136,26 @@ class ShaderRenderService:
         if moderngl is None:
             raise RuntimeError("moderngl is not installed")
 
+    @staticmethod
+    def _try_compile(shader_code: str) -> str | None:
+        """Try compiling shader_code in a temporary GL context.
+
+        Returns None on success, or the error message string on failure.
+        """
+        import sys
+        _kw: dict = {}
+        if sys.platform.startswith("linux"):
+            _kw["backend"] = "egl"
+        ctx = moderngl.create_standalone_context(**_kw)
+        try:
+            frag_src = _FRAGMENT_WRAPPER.format(user_code=shader_code)
+            ctx.program(vertex_shader=_VERTEX_SHADER, fragment_shader=frag_src)
+            return None
+        except Exception as e:
+            return str(e)
+        finally:
+            ctx.release()
+
     async def render_shader_video(
         self,
         render_id: str,
@@ -145,9 +166,36 @@ class ShaderRenderService:
     ) -> dict:
         """Render a complete video from a GLSL shader + audio analysis.
 
-        Produces an MP4 with the shader visuals driven by per-frame audio features.
+        Validates the shader first. If compilation fails, asks the LLM to fix
+        it (up to 2 retries). Falls back to a built-in shader on total failure.
         The heavy GL + FFmpeg work runs in a thread to avoid blocking the event loop.
         """
+        # Validate shader and retry via LLM if compilation fails
+        compile_err = await asyncio.to_thread(self._try_compile, shader_code)
+        if compile_err:
+            logger.warning("Shader failed to compile, requesting LLM fix: %s", compile_err)
+            from app.services.llm_service import LLMService
+            llm = LLMService()
+            for retry in range(2):
+                fixed = await llm.generate_shader(
+                    description="Fix the shader compilation error",
+                    retry_error=compile_err,
+                )
+                if not fixed:
+                    break
+                retry_err = await asyncio.to_thread(self._try_compile, fixed)
+                if retry_err is None:
+                    logger.info("LLM-fixed shader compiled on retry %d", retry + 1)
+                    shader_code = fixed
+                    compile_err = None
+                    break
+                logger.warning("LLM retry %d still fails: %s", retry + 1, retry_err)
+                compile_err = retry_err
+
+            if compile_err:
+                logger.warning("All retries failed, using fallback shader")
+                shader_code = _FALLBACK_SHADER
+
         return await asyncio.to_thread(
             self._render_blocking,
             render_id, audio_path, analysis, render_spec, shader_code,
@@ -201,7 +249,8 @@ class ShaderRenderService:
             color_attachments=[ctx.texture((width, height), 4)],
         )
 
-        # Try to compile user's shader, fall back if it fails
+        # Compile shader (already validated+retried in render_shader_video,
+        # but keep fallback as a safety net for context-specific failures)
         frag_src = _FRAGMENT_WRAPPER.format(user_code=shader_code)
         try:
             prog = ctx.program(
@@ -209,7 +258,7 @@ class ShaderRenderService:
                 fragment_shader=frag_src,
             )
         except Exception as e:
-            logger.warning("User shader failed to compile, using fallback: %s", e)
+            logger.warning("Shader failed in render context, using fallback: %s", e)
             frag_src = _FRAGMENT_WRAPPER.format(user_code=_FALLBACK_SHADER)
             prog = ctx.program(
                 vertex_shader=_VERTEX_SHADER,
@@ -247,18 +296,27 @@ class ShaderRenderService:
             str(output_path),
         ]
 
+        # Write FFmpeg stderr to a temp file instead of a pipe to avoid the
+        # classic subprocess deadlock: if the 64KB pipe buffer fills (FFmpeg
+        # writes lots of progress/stats), FFmpeg blocks on stderr writes and
+        # can never finish reading stdin → everything hangs.
+        stderr_file = tempfile.NamedTemporaryFile(
+            mode="w+b", suffix=".log", delete=False,
+        )
+        stderr_path = Path(stderr_file.name)
+
         proc = subprocess.Popen(
             ffmpeg_cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_file,
         )
 
         total_frames = int(duration * fps)
 
         # Scale FFmpeg finalization timeout: encoding overhead after all frames
         # are piped depends on duration, resolution, and the faststart muxer pass.
-        ffmpeg_timeout = max(120, int(duration * 2) + 60)
+        ffmpeg_timeout = max(180, int(duration * 3) + 60)
 
         try:
             fbo.use()
@@ -335,11 +393,16 @@ class ShaderRenderService:
                 raise RuntimeError(
                     f"FFmpeg encoding timed out after {ffmpeg_timeout}s"
                 )
+            finally:
+                stderr_file.close()
 
             if proc.returncode != 0:
-                stderr = proc.stderr.read().decode(errors="replace")
-                logger.error("FFmpeg failed: %s", stderr[-500:])
+                stderr_tail = stderr_path.read_text(errors="replace")[-500:]
+                logger.error("FFmpeg failed: %s", stderr_tail)
+                stderr_path.unlink(missing_ok=True)
                 raise RuntimeError(f"FFmpeg encoding failed (rc={proc.returncode})")
+
+            stderr_path.unlink(missing_ok=True)
 
         download_url = f"/storage/renders/{render_id}.mp4"
         logger.info("Shader render complete: %s → %s", render_id, download_url)

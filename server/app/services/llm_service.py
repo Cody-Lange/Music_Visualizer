@@ -290,18 +290,24 @@ Choose appropriate techniques based on the description. You have the full Shader
 - Can simulate 100s–1000s of particles per pixel
 - Combine with noise for organic trails and flocking behavior
 
-## CRITICAL CONSTRAINTS (WebGL / GLSL ES 1.00)
+## CRITICAL CONSTRAINTS (#version 330 core)
+
+The wrapper compiles your code as #version 330, which is STRICT about types.
 
 1. NO texture(), iChannel, sampler2D, dFdx, dFdy, fwidth
-2. Use float literals: 1.0 not 1, 0.0 not 0 (except for int loop counters)
-3. Initialize ALL variables before use
-4. Array sizes must be compile-time constants
-5. for-loop bounds must be compile-time constants (e.g. for(int i=0;i<64;i++))
-6. No integer division applied to floats
-7. No recursive function calls
-8. Return type of mainImage is void — write to fragColor parameter
-9. Keep total loop iterations reasonable (max ~200 combined ray steps + noise octaves)
-10. No #version directive — the wrapper handles it
+2. ALL numeric literals must match their type — 1.0 not 1, 0.0 not 0 (except int loop counters)
+3. Return values MUST exactly match the function return type — no implicit conversion. \
+   A float function must return a float (return 0.0; NOT return 0;), \
+   a vec3 function must return vec3, etc. #version 330 does NOT allow implicit type casts in return.
+4. Function arguments must match parameter types exactly — pass 0.0 not 0 for float params
+5. Initialize ALL variables before use
+6. Array sizes must be compile-time constants
+7. for-loop bounds must be compile-time constants (e.g. for(int i=0;i<64;i++))
+8. No recursive function calls
+9. Return type of mainImage is void — write to fragColor parameter
+10. Keep total loop iterations reasonable (max ~200 combined ray steps + noise octaves)
+11. No #version directive — the wrapper handles it
+12. Use explicit float() or int() casts when mixing types (e.g. float(myInt) * 2.0)
 
 ## OUTPUT FORMAT
 
