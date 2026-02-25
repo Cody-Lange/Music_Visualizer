@@ -232,7 +232,10 @@ class LLMService:
         messages: list[ChatMessage],
         audio_context: str = "",
     ) -> AsyncGenerator[str]:
-        """Stream a chat response from Gemini Flash."""
+        """Stream a chat response from Gemini Flash.
+
+        Retries up to 3 times on rate-limit (429) errors with backoff.
+        """
         if not messages:
             yield "I need a message to respond to. Please describe what you'd like for your visualization."
             return
@@ -279,24 +282,54 @@ class LLMService:
             max_output_tokens=8192,
         )
 
-        try:
-            chat = client.aio.chats.create(
-                model=settings.gemini_model,
-                history=history if history else None,
-                config=config,
-            )
+        max_retries = 3
+        for attempt in range(max_retries + 1):
+            try:
+                chat = client.aio.chats.create(
+                    model=settings.gemini_model,
+                    history=history if history else None,
+                    config=config,
+                )
 
-            response = await chat.send_message_stream(
-                last_content.parts[0].text if last_content.parts else "",
-            )
+                response = await chat.send_message_stream(
+                    last_content.parts[0].text if last_content.parts else "",
+                )
 
-            async for chunk in response:
-                if chunk.text:
-                    yield chunk.text
+                async for chunk in response:
+                    if chunk.text:
+                        yield chunk.text
 
-        except Exception:
-            logger.exception("Gemini API error")
-            yield "\n\n*I encountered an error communicating with the AI service. Please try again.*"
+                return  # Success — stop retrying
+
+            except ClientError as e:
+                if e.code == 429 and attempt < max_retries:
+                    delay = 15.0
+                    match = _re.search(
+                        r"retry in ([\d.]+)s", str(e), _re.IGNORECASE,
+                    )
+                    if match:
+                        delay = float(match.group(1)) + 1.0
+                    logger.warning(
+                        "Rate limited on stream_chat (attempt %d/%d), "
+                        "retrying in %.1fs",
+                        attempt + 1, max_retries, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.exception("Gemini API error")
+                yield (
+                    "\n\n*I encountered an error communicating with "
+                    "the AI service. Please try again.*"
+                )
+                return
+
+            except Exception:
+                logger.exception("Gemini API error")
+                yield (
+                    "\n\n*I encountered an error communicating with "
+                    "the AI service. Please try again.*"
+                )
+                return
 
     async def generate_thematic_analysis(
         self,
