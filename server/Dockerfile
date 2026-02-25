@@ -2,16 +2,14 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Mesa EGL/GL packages for headless ModernGL rendering.
-# Debian Trixie renamed libegl1-mesa → libegl-mesa0 and
-# libosmesa6 → libosmesa6t64.  We install the virtual package
-# libegl1 which pulls the correct provider on any Debian version.
+# Mesa EGL/GL for headless ModernGL rendering (EGL backend).
+# OSMesa is not needed — the code uses backend="egl" explicitly.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     libsndfile1 \
     libegl1 \
+    libgles2 \
     libgl1-mesa-dri \
-    libosmesa6t64 \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
