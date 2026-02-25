@@ -97,11 +97,16 @@ class RenderService:
 
         # Count additional inputs (AI keyframe images)
         extra_inputs: list[str] = []
+        num_keyframe_inputs = 0
         if keyframe_paths:
             for section in render_spec.sections:
                 kf = keyframe_paths.get(section.label, "")
                 if kf and Path(kf).exists():
                     extra_inputs.extend(["-loop", "1", "-t", str(duration), "-i", kf])
+                    num_keyframe_inputs += 1
+
+        # Input layout: [0]=color source, [1..N]=keyframes, [N+1]=audio
+        audio_input_index = 1 + num_keyframe_inputs
 
         logger.info(
             "Starting FFmpeg render: %s (template=%s, sections=%d)",
@@ -124,7 +129,7 @@ class RenderService:
                 "-i", audio_path,
                 "-filter_complex", filter_complex,
                 "-map", "[vout]",
-                "-map", f"{1 + len(extra_inputs) // 4}:a",
+                "-map", f"{audio_input_index}:a",
                 "-c:v", "libx264",
                 "-preset", "fast",
                 "-crf", "21",
