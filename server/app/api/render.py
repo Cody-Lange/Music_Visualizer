@@ -1,17 +1,25 @@
+import logging
 import uuid
 
 from fastapi import APIRouter, HTTPException
 
 from app.models.render import RenderRequest, RenderEditRequest
+from app.services.ai_image_service import AIImageService
 from app.services.render_service import RenderService
 from app.services.storage import job_store
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.post("/start")
 async def start_render(request: RenderRequest) -> dict:
-    """Submit a render spec and start video generation."""
+    """Submit a render spec and start video generation.
+
+    If the render spec includes useAiKeyframes=true (set via the raw JSON
+    from the chat), AI keyframe images are generated for each section before
+    the video is rendered.
+    """
     job = job_store.get_job(request.job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Audio job not found")
@@ -29,27 +37,67 @@ async def start_render(request: RenderRequest) -> dict:
         "percentage": 0,
     })
 
-    # Start render (synchronous placeholder — will be Celery task)
-    service = RenderService()
+    # Check if AI keyframes were requested (passed as extra field in raw JSON)
+    raw_spec = job.get("render_spec", {})
+    use_ai = raw_spec.get("useAiKeyframes", False)
+
+    render_service = RenderService()
+    keyframe_paths: dict[str, str] = {}
+
     try:
+        # Step 1: Generate AI keyframes if requested
+        if use_ai and request.render_spec.sections:
+            job_store.update_job(render_id, {
+                "status": "generating_keyframes",
+                "percentage": 10,
+            })
+            logger.info("Generating AI keyframes for render %s", render_id)
+
+            ai_service = AIImageService()
+            try:
+                aspect = request.render_spec.export_settings.aspect_ratio
+                keyframe_paths = await ai_service.generate_keyframes(
+                    sections=request.render_spec.sections,
+                    global_style=request.render_spec.global_style,
+                    aspect_ratio=aspect,
+                )
+            except Exception:
+                logger.exception("AI keyframe generation failed, continuing with procedural")
+            finally:
+                await ai_service.close()
+
+        # Step 2: Render the video
+        job_store.update_job(render_id, {
+            "status": "rendering",
+            "percentage": 30 if use_ai else 10,
+        })
+
         audio_path = job.get("path", "")
-        result = await service.render_video(
+        result = await render_service.render_video(
             render_id=render_id,
             audio_path=audio_path,
             analysis=analysis,
             render_spec=request.render_spec,
             lyrics=job.get("lyrics"),
+            keyframe_paths=keyframe_paths if keyframe_paths else None,
         )
+
         job_store.update_job(render_id, {
             "status": "complete",
             "percentage": 100,
             "download_url": result.get("download_url"),
         })
+
     except Exception as e:
+        logger.exception("Render failed: %s", render_id)
         job_store.update_job(render_id, {"status": "error", "error": str(e)})
         raise HTTPException(status_code=500, detail=f"Render failed: {e}") from e
 
-    return {"render_id": render_id, "status": "complete"}
+    return {
+        "render_id": render_id,
+        "status": "complete",
+        "download_url": result.get("download_url"),
+    }
 
 
 @router.get("/{render_id}/status")

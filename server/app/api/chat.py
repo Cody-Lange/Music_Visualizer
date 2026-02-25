@@ -18,14 +18,17 @@ ChatPhase = Literal["analysis", "refinement", "confirmation", "rendering", "edit
 _CONFIRM_PATTERNS = re.compile(
     r"\b("
     r"yes\s*(,?\s*render|,?\s*go|,?\s*do\s*it|,?\s*please|,?\s*let'?s)|"
-    r"render\s*(it|now|the\s*video|this)|"
+    r"render\s*(it|now|the\s*video|this)?|"
     r"make\s*the\s*video|"
     r"start\s*render|"
     r"let'?s\s*(go|do\s*it|render|make)|"
-    r"looks?\s*(good|great|perfect),?\s*(render|go|let'?s)|"
+    r"looks?\s*(good|great|perfect)|"
     r"ready\s*to\s*render|"
     r"go\s*ahead|"
-    r"do\s*it"
+    r"do\s*it|"
+    r"with\s*ai|"
+    r"procedural\s*(only|rendering)?|"
+    r"that'?s?\s*(perfect|great|good|awesome)"
     r")\b",
     re.IGNORECASE,
 )
@@ -33,7 +36,8 @@ _CONFIRM_PATTERNS = re.compile(
 # Patterns the LLM uses to ask for render confirmation
 _LLM_ASKS_CONFIRM = re.compile(
     r"(ready\s+to\s+render\??|shall\s+(i|we)\s+(start|begin)\s+render|"
-    r"proceed\s+with\s+render|confirm\s+to\s+render|want\s+me\s+to\s+render)",
+    r"proceed\s+with\s+render|confirm\s+to\s+render|want\s+me\s+to\s+render|"
+    r"type\s+.?render.?\s+|would\s+you\s+like\s+to\s+enhance)",
     re.IGNORECASE,
 )
 
@@ -224,9 +228,21 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                     )
 
                 if render_spec:
+                    # Check if user requested AI keyframes
+                    use_ai = render_spec.pop("useAiKeyframes", False)
+                    # Also detect from user message
+                    if re.search(r"\bwith\s+ai\b", user_content, re.IGNORECASE):
+                        use_ai = True
+                    render_spec["useAiKeyframes"] = use_ai
+
                     # Store the render spec on the job
                     if job_id:
                         job_store.update_job(job_id, {"render_spec": render_spec})
+
+                    await websocket.send_text(json.dumps({
+                        "type": "system",
+                        "content": f"Render spec generated! {'AI keyframes enabled.' if use_ai else 'Procedural rendering.'} Starting render...",
+                    }))
 
                     await websocket.send_text(json.dumps({
                         "type": "render_spec",

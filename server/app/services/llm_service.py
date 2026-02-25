@@ -60,26 +60,58 @@ Detect when the user is satisfied. Signs include:
 - Lack of further change requests after 2+ exchanges
 - User asking about export settings or timeline
 
-When you detect satisfaction, present a DETAILED FINAL SUMMARY of all agreed-upon decisions in a structured table format. The summary MUST include:
+When you detect satisfaction, present a COMPREHENSIVE FINAL SUMMARY of every agreed-upon decision. This is the last chance for the user to review before rendering, so be extremely thorough and specific. The summary MUST include ALL of the following:
 
-1. **Template & Style** — The chosen visual template, style modifiers, and recurring motifs
-2. **Section-by-Section Breakdown** — For EVERY section, include:
-   - Section name with exact timestamps (e.g., "Intro (0.0s - 15.2s)")
-   - Full color palette with all hex codes
-   - Motion style and intensity level (0.0-1.0)
-   - Visual elements and imagery description
-   - AI keyframe prompt (the exact prompt that will be used for image generation)
-   - Transition types (in and out)
-3. **Lyrics Display** — Font, size, animation style, color
-4. **Export Settings** — Resolution, FPS, aspect ratio
-5. **AI Rendering** — Ask the user if they would like to enhance the visualization with AI-generated keyframe images at section boundaries. Explain that:
-   - **Without AI rendering**: The video uses procedural visuals (geometric patterns, waveforms, particle effects) driven by audio features — free and instant
-   - **With AI rendering**: AI generates unique artwork for each section based on the keyframe prompts above, creating richer and more thematic visuals — uses AI image generation credits
+## 1. Overall Creative Vision
+- **Visual Concept**: A 2-3 sentence description of the overall artistic direction and narrative arc of the video
+- **Template**: The chosen visual template (e.g., "nebula") and WHY it fits this track
+- **Style Modifiers**: All active modifiers (e.g., "ethereal", "high-contrast") with brief explanations of their visual effect
+- **Recurring Motifs**: Visual elements that appear throughout (e.g., "floating orbs", "fractal branches")
+- **Color Story**: How the overall color palette evolves across the track
 
-Then ask: "Ready to render? And would you like AI-generated keyframes for richer visuals, or stick with procedural rendering?"
+## 2. Section-by-Section Breakdown
+For EVERY section detected in the audio, present a detailed breakdown:
+
+**[Section Name] (start_time - end_time) — [duration]s**
+| Attribute | Value |
+|-----------|-------|
+| Mood/Energy | e.g., "Contemplative, low energy (0.3)" |
+| Color Palette | ALL hex codes with color names: #1B1464 (Deep Indigo), #7C5CFC (Electric Violet) |
+| Motion Style | e.g., "slow-drift" — describe what the viewer will actually see |
+| Intensity | 0.0-1.0 scale with human-readable description |
+| Visual Elements | Specific objects/effects: "particle nebula with swirling dust lanes, distant stars pulsing on beats" |
+| AI Keyframe Prompt | The EXACT vivid prompt for AI image generation |
+| Transition In | e.g., "cross-dissolve from previous section over 0.5s" |
+| Transition Out | e.g., "fade-to-black" |
+
+## 3. Lyrics Display Configuration
+- **Enabled**: Yes/No
+- **Font**: sans/serif/mono (and why)
+- **Size**: small/medium/large
+- **Animation**: The specific animation style and what it looks like
+- **Color**: Hex code with name
+- **Shadow**: Yes/No
+
+## 4. Export Settings
+- **Resolution**: Width x Height
+- **FPS**: Frame rate
+- **Aspect Ratio**: 16:9, 9:16, or 1:1
+- **Quality**: draft/standard/high
+
+## 5. AI-Enhanced Rendering
+Present this clearly:
+
+> **Would you like to enhance this video with AI-generated artwork?**
+>
+> - **Procedural only** (default): Real-time geometric patterns, waveforms, and particle effects driven by the audio data. Free and renders quickly.
+> - **AI-enhanced**: AI generates unique artwork for each section based on the keyframe prompts above, creating richer, more thematic visuals. Uses AI image generation.
+
+Then end with a clear call to action:
+> **Ready to render?** Type "render" or "let's go" to start. Add "with AI" if you want AI-generated keyframes.
 
 When the user explicitly confirms they want to render, respond with ONLY a JSON render spec block wrapped in ```json fences. The JSON must conform to this schema:
 {
+  "useAiKeyframes": true/false,
   "globalStyle": {
     "template": "<one of: nebula, geometric, waveform, cinematic, retro, nature, abstract, urban, glitchbreak, 90s-anime>",
     "styleModifiers": ["<modifier>", ...],
@@ -101,7 +133,7 @@ When the user explicitly confirms they want to render, respond with ONLY a JSON 
       "colorPalette": ["#hex", ...],
       "motionStyle": "<slow-drift|pulse|energetic|chaotic|breathing|glitch|smooth-flow|staccato>",
       "intensity": <0.0-1.0>,
-      "aiPrompt": "<image generation prompt>",
+      "aiPrompt": "<detailed, vivid image generation prompt specific to this section's mood, themes, and agreed visual concept>",
       "transitionIn": "<transition type>",
       "transitionOut": "<transition type>",
       "visualElements": ["<element>", ...]
@@ -116,6 +148,8 @@ When the user explicitly confirms they want to render, respond with ONLY a JSON 
   }
 }
 
+Set "useAiKeyframes" to true ONLY if the user explicitly asks for AI-generated keyframes / AI rendering. Default is false.
+
 ### Phase: EDITING (post-render)
 Interpret edit requests and suggest specific changes. Reference sections by name and timestamp.
 CRITICAL RULES for editing:
@@ -129,6 +163,7 @@ CRITICAL RULES for editing:
 RENDER_SPEC_EXTRACTION_PROMPT = """Based on the conversation so far, extract the final agreed-upon visualization plan as a JSON render spec. Output ONLY valid JSON (no markdown fences, no explanation) conforming to this schema:
 
 {
+  "useAiKeyframes": false,
   "globalStyle": {
     "template": "<one of: nebula, geometric, waveform, cinematic, retro, nature, abstract, urban, glitchbreak, 90s-anime>",
     "styleModifiers": ["<modifier>"],
@@ -147,13 +182,13 @@ RENDER_SPEC_EXTRACTION_PROMPT = """Based on the conversation so far, extract the
       "label": "<section label>",
       "startTime": 0.0,
       "endTime": 10.0,
-      "colorPalette": ["#hex1", "#hex2"],
+      "colorPalette": ["#hex1", "#hex2", "#hex3"],
       "motionStyle": "slow-drift",
       "intensity": 0.5,
-      "aiPrompt": "<prompt for AI image generation>",
+      "aiPrompt": "<detailed, vivid image generation prompt specific to this section>",
       "transitionIn": "cross-dissolve",
       "transitionOut": "cross-dissolve",
-      "visualElements": ["element"]
+      "visualElements": ["element1", "element2"]
     }
   ],
   "exportSettings": {
@@ -165,7 +200,12 @@ RENDER_SPEC_EXTRACTION_PROMPT = """Based on the conversation so far, extract the
   }
 }
 
-Use the exact section boundaries from the audio analysis. Fill in all fields based on what was discussed."""
+IMPORTANT:
+- Set "useAiKeyframes" to true ONLY if the user explicitly requested AI rendering/AI keyframes.
+- Use the exact section boundaries from the audio analysis.
+- Each section's "aiPrompt" should be a detailed, vivid prompt suitable for AI image generation — not generic. Tailor it to the specific mood, themes, and visual concept discussed for that section.
+- Each section's "visualElements" should list specific procedural effects (particles, geometric shapes, waveforms, etc.) tailored to the section.
+- Fill in ALL fields based on what was discussed."""
 
 
 class LLMService:
@@ -233,7 +273,7 @@ class LLMService:
             system_instruction=SYSTEM_PROMPT,
             temperature=0.8,
             top_p=0.95,
-            max_output_tokens=4096,
+            max_output_tokens=8192,
         )
 
         try:

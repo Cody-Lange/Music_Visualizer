@@ -3,7 +3,9 @@ import { Send, Loader2, CheckCircle2, Sparkles, MessageSquare, Clapperboard } fr
 import { useChatStore, createMessageId } from "@/stores/chat-store";
 import { useAudioStore } from "@/stores/audio-store";
 import { useAnalysisStore } from "@/stores/analysis-store";
+import { useRenderStore } from "@/stores/render-store";
 import { ChatMessage } from "@/components/chat/chat-message";
+import { AnalysisProgress } from "@/components/chat/analysis-progress";
 import { useChatWs } from "@/providers/chat-ws-provider";
 import type { ChatPhase } from "@/services/websocket";
 
@@ -78,6 +80,9 @@ export function ChatPanel() {
   const setView = useAudioStore((s) => s.setView);
   const jobId = useAudioStore((s) => s.jobId);
   const analysis = useAnalysisStore((s) => s.analysis);
+  const isAnalyzing = useAnalysisStore((s) => s.isAnalyzing);
+
+  const renderStore = useRenderStore();
 
   const { sendMessage, isConnected } = useChatWs();
 
@@ -99,13 +104,15 @@ export function ChatPanel() {
   }, [analysis, isConnected, initialAnalysisSent, setInitialAnalysisSent, sendMessage]);
 
   // When phase transitions to "rendering" and we have a render spec,
-  // auto-trigger the render and navigate to editor
+  // trigger the actual render and navigate to editor
   useEffect(() => {
     if (phase === "rendering" && renderSpec && !renderTriggered.current) {
       renderTriggered.current = true;
 
-      // Trigger the render API call
       if (jobId) {
+        renderStore.setStatus("rendering");
+        renderStore.setProgress(0, "Starting render...");
+
         fetch("/api/render/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -115,23 +122,38 @@ export function ChatPanel() {
           }),
         })
           .then((res) => {
-            if (!res.ok) {
-              console.error("Render failed:", res.status);
-            }
+            if (!res.ok) throw new Error(`Render failed: ${res.status}`);
             return res.json();
           })
           .then((data) => {
             if (data.render_id) {
-              console.log("Render started:", data.render_id);
+              renderStore.setRenderId(data.render_id);
             }
+            // Use the download_url directly from render response
+            if (data.download_url) {
+              renderStore.setDownloadUrl(data.download_url);
+            } else if (data.render_id && data.status === "complete") {
+              // Fallback: fetch the download URL
+              fetch(`/api/render/${data.render_id}/download`)
+                .then((r) => r.json())
+                .then((d) => {
+                  if (d.download_url) {
+                    renderStore.setDownloadUrl(d.download_url);
+                  }
+                });
+            }
+            // Navigate to editor
+            setView("editor");
           })
-          .catch((err) => console.error("Render error:", err));
+          .catch((err) => {
+            console.error("Render error:", err);
+            renderStore.setError(String(err));
+            // Still navigate to editor so user sees status
+            setView("editor");
+          });
       }
-
-      // Navigate to editor
-      setView("editor");
     }
-  }, [phase, renderSpec, setView, jobId]);
+  }, [phase, renderSpec, setView, jobId, renderStore]);
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -167,10 +189,15 @@ export function ChatPanel() {
 
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-        {messages.length === 0 && !isStreaming && (
-          <div className="flex flex-col items-center justify-center py-12 text-center text-text-secondary">
-            <Sparkles size={24} className="mb-3 text-accent/50" />
-            <p className="text-sm">Preparing your track analysis...</p>
+        {/* Analysis checklist — always first in chat */}
+        {(isAnalyzing || analysis) && (
+          <div className="flex gap-3 flex-row">
+            <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full mt-0.5 bg-bg-tertiary">
+              <Sparkles size={14} className="text-accent" />
+            </div>
+            <div className="max-w-[85%] rounded-2xl rounded-tl-sm bg-bg-tertiary/70 px-4 py-3">
+              <AnalysisProgress />
+            </div>
           </div>
         )}
 
@@ -181,10 +208,13 @@ export function ChatPanel() {
         {renderSpec && phase === "rendering" && (
           <div className="mx-auto max-w-md rounded-xl border border-accent/20 bg-accent/5 p-4 text-center">
             <Clapperboard size={20} className="mx-auto mb-2 text-accent" />
-            <p className="text-sm font-medium text-text-primary">Render spec ready</p>
+            <p className="text-sm font-medium text-text-primary">Rendering your video...</p>
             <p className="mt-1 text-xs text-text-secondary">
               Template: {(renderSpec as any).global_style?.template ?? (renderSpec as any).globalStyle?.template ?? "—"} | {(renderSpec as any).sections?.length ?? 0} sections
             </p>
+            <div className="mt-2">
+              <Loader2 size={16} className="mx-auto animate-spin text-accent" />
+            </div>
           </div>
         )}
 
