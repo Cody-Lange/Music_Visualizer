@@ -177,6 +177,73 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
             # Build context from analysis data
             context = _build_analysis_context(job_id) if job_id else ""
 
+            # Early detection: if user is confirming render, skip streaming
+            # the JSON and go straight to render spec extraction
+            will_render = (
+                phase == "confirmation"
+                and _CONFIRM_PATTERNS.search(user_content)
+            )
+
+            if will_render:
+                # Transition to rendering phase immediately
+                phase = "rendering"
+                await websocket.send_text(json.dumps({
+                    "type": "phase",
+                    "phase": phase,
+                }))
+                await websocket.send_text(json.dumps({
+                    "type": "system",
+                    "content": "Generating render specification...",
+                }))
+
+                # Extract render spec from conversation (don't stream
+                # the JSON response to the chat)
+                render_spec = await llm.extract_render_spec(
+                    conversation_history, context
+                )
+
+                if render_spec:
+                    # Determine AI keyframes preference
+                    use_ai = render_spec.pop("useAiKeyframes", False)
+                    if re.search(r"\bwith\s+ai\b", user_content, re.IGNORECASE):
+                        use_ai = True
+
+                    # Store on the job
+                    if job_id:
+                        job_store.update_job(job_id, {
+                            "render_spec": render_spec,
+                            "use_ai_keyframes": use_ai,
+                        })
+
+                    await websocket.send_text(json.dumps({
+                        "type": "system",
+                        "content": (
+                            f"Render spec ready! "
+                            f"{'AI keyframes enabled.' if use_ai else 'Procedural rendering.'} "
+                            f"Starting render..."
+                        ),
+                    }))
+
+                    await websocket.send_text(json.dumps({
+                        "type": "render_spec",
+                        "render_spec": render_spec,
+                    }))
+                else:
+                    # Extraction failed — go back to confirmation
+                    phase = "confirmation"
+                    await websocket.send_text(json.dumps({
+                        "type": "phase",
+                        "phase": phase,
+                    }))
+                    await websocket.send_text(json.dumps({
+                        "type": "system",
+                        "content": "I had trouble generating the render spec. Could you confirm once more?",
+                    }))
+
+                continue  # Skip normal streaming for this turn
+
+            # ── Normal streaming path ──────────────────────────────
+
             # Send current phase info
             await websocket.send_text(json.dumps({
                 "type": "phase",
@@ -211,52 +278,6 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                     "type": "phase",
                     "phase": phase,
                 }))
-
-            # If we've moved to rendering phase, extract the render spec
-            if phase == "rendering":
-                # First check if the LLM already output JSON in its response
-                render_spec = _try_extract_render_spec(full_response)
-
-                if not render_spec:
-                    # Ask the LLM to produce a structured render spec
-                    await websocket.send_text(json.dumps({
-                        "type": "system",
-                        "content": "Generating render specification...",
-                    }))
-                    render_spec = await llm.extract_render_spec(
-                        conversation_history, context
-                    )
-
-                if render_spec:
-                    # Check if user requested AI keyframes
-                    use_ai = render_spec.pop("useAiKeyframes", False)
-                    # Also detect from user message
-                    if re.search(r"\bwith\s+ai\b", user_content, re.IGNORECASE):
-                        use_ai = True
-
-                    # Store the render spec and AI flag on the job separately
-                    if job_id:
-                        job_store.update_job(job_id, {
-                            "render_spec": render_spec,
-                            "use_ai_keyframes": use_ai,
-                        })
-
-                    await websocket.send_text(json.dumps({
-                        "type": "system",
-                        "content": f"Render spec generated! {'AI keyframes enabled.' if use_ai else 'Procedural rendering.'} Starting render...",
-                    }))
-
-                    await websocket.send_text(json.dumps({
-                        "type": "render_spec",
-                        "render_spec": render_spec,
-                    }))
-                else:
-                    # Fallback: ask user to try again
-                    phase = "confirmation"
-                    await websocket.send_text(json.dumps({
-                        "type": "system",
-                        "content": "I had trouble generating the render spec. Could you confirm once more that you'd like to render?",
-                    }))
 
     except WebSocketDisconnect:
         logger.info("Chat WebSocket disconnected: session=%s", session_id)

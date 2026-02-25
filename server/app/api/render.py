@@ -12,6 +12,56 @@ from app.services.storage import job_store
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+# Valid values for Literal-typed fields — used to coerce LLM hallucinations
+_VALID_TEMPLATES = {
+    "nebula", "geometric", "waveform", "cinematic", "retro",
+    "nature", "abstract", "urban", "glitchbreak", "90s-anime",
+}
+_VALID_MOTIONS = {
+    "slow-drift", "pulse", "energetic", "chaotic",
+    "breathing", "glitch", "smooth-flow", "staccato",
+}
+_VALID_TRANSITIONS = {
+    "fade-from-black", "fade-to-black", "cross-dissolve", "hard-cut",
+    "morph", "flash-white", "wipe", "zoom-in", "zoom-out",
+}
+_VALID_FPS = {24, 30, 60}
+
+
+def _sanitize_render_spec(spec: dict) -> dict:
+    """Coerce LLM-generated values to valid defaults when they don't match Literal types."""
+    # Strip extra fields
+    spec.pop("useAiKeyframes", None)
+
+    # Sanitize globalStyle / global_style
+    gs = spec.get("globalStyle") or spec.get("global_style") or {}
+    if gs.get("template") not in _VALID_TEMPLATES:
+        gs["template"] = "nebula"
+
+    # Sanitize sections
+    for sec in spec.get("sections", []):
+        if sec.get("motionStyle", sec.get("motion_style")) not in _VALID_MOTIONS:
+            sec["motionStyle"] = "slow-drift"
+            sec.pop("motion_style", None)
+
+        for key, camel in [("transitionIn", "transition_in"), ("transitionOut", "transition_out")]:
+            val = sec.get(key, sec.get(camel, "cross-dissolve"))
+            if val not in _VALID_TRANSITIONS:
+                sec[key] = "cross-dissolve"
+                sec.pop(camel, None)
+
+        # Clamp intensity
+        intensity = sec.get("intensity", 0.5)
+        if isinstance(intensity, (int, float)):
+            sec["intensity"] = max(0.0, min(1.0, float(intensity)))
+
+    # Sanitize exportSettings / export_settings
+    es = spec.get("exportSettings") or spec.get("export_settings") or {}
+    if es.get("fps") not in _VALID_FPS:
+        es["fps"] = 30
+
+    return spec
+
 
 @router.post("/start")
 async def start_render(req: Request) -> dict:
@@ -32,8 +82,7 @@ async def start_render(req: Request) -> dict:
         raise HTTPException(status_code=422, detail="Missing jobId")
 
     raw_spec = body.get("renderSpec") or body.get("render_spec") or {}
-    # Strip fields not in the RenderSpec model
-    raw_spec.pop("useAiKeyframes", None)
+    raw_spec = _sanitize_render_spec(raw_spec)
 
     try:
         render_spec = RenderSpec.model_validate(raw_spec)
