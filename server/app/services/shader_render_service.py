@@ -59,8 +59,12 @@ void main() {{
 }}
 """
 
-# Fallback shader if the user's shader fails to compile
-_FALLBACK_SHADER = """\
+# ── Curated fallback shaders ──────────────────────────────────────────
+# Each is pre-tested to compile under #version 330 with the fragment
+# wrapper.  ``pick_fallback_shader()`` selects based on description
+# keywords so the user always gets visual variety.
+
+_FALLBACK_PLASMA = """\
 vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
     return a + b * cos(6.28318 * (c * t + d));
 }
@@ -72,18 +76,206 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     uv += sin(uv.yx * 3.0 + t + u_bass * 2.0) * (0.3 + u_energy * 0.5);
     d = length(uv);
     float rings = sin(d * 8.0 - t * 2.0 + u_bass * 6.0) * 0.5 + 0.5;
-    vec3 col = palette(
-        d + t * 0.2 + u_spectralCentroid,
-        vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4), vec3(0.0, 0.15, 0.2)
-    );
+    vec3 col = palette(d + t * 0.2 + u_spectralCentroid,
+        vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4), vec3(0.0, 0.15, 0.2));
     col *= rings;
     col += vec3(0.1, 0.05, 0.15) * u_treble * 3.0;
-    col += vec3(0.3) * u_beat;
-    float vig = 1.0 - smoothstep(0.4, 1.4, length((fragCoord / iResolution.xy - 0.5) * 2.0));
-    col *= vig;
+    col += vec3(0.3) * smoothstep(0.0, 1.0, u_beat);
+    col *= 1.0 - smoothstep(0.5, 1.5, length(uv));
     fragColor = vec4(col, 1.0);
 }
 """
+
+_FALLBACK_KALEIDOSCOPE = """\
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+    float t = iTime * 0.2;
+    float a = atan(uv.y, uv.x);
+    float r = length(uv);
+    float segments = 6.0;
+    a = mod(a, 6.28318 / segments);
+    a = abs(a - 3.14159 / segments);
+    uv = vec2(cos(a), sin(a)) * r;
+    uv += sin(uv * 4.0 + t + u_mid * 3.0) * (0.15 + u_bass * 0.2);
+    float d = length(uv);
+    float pattern = sin(d * 12.0 - t * 3.0 + u_bass * 5.0) * 0.5 + 0.5;
+    pattern *= sin(a * segments * 2.0 + t + u_treble * 4.0) * 0.5 + 0.5;
+    vec3 col = palette(d * 0.5 + t * 0.3 + u_spectralCentroid * 0.5,
+        vec3(0.5), vec3(0.5), vec3(1.0, 0.8, 0.6), vec3(0.2, 0.1, 0.0));
+    col *= pattern * 1.5;
+    col += vec3(0.2, 0.1, 0.3) * smoothstep(0.0, 1.0, u_beat);
+    col += vec3(0.05) * u_treble;
+    col *= 1.0 - smoothstep(0.6, 1.6, r);
+    fragColor = vec4(col, 1.0);
+}
+"""
+
+_FALLBACK_TUNNEL = """\
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+    float a = atan(uv.y, uv.x) / 6.28318;
+    float r = length(uv);
+    float tunnel = 0.5 / (r + 0.001);
+    float speed = iTime * 0.5 + u_energy * 0.3;
+    vec2 st = vec2(a + speed * 0.1, tunnel - speed);
+    st += sin(st.yx * 3.0) * (0.1 + u_bass * 0.15);
+    float p1 = sin(st.x * 12.0 + st.y * 6.0) * 0.5 + 0.5;
+    float p2 = sin(st.x * 8.0 - st.y * 4.0 + u_mid * 4.0) * 0.5 + 0.5;
+    float pattern = p1 * p2;
+    vec3 col = palette(tunnel * 0.1 + iTime * 0.05 + u_spectralCentroid,
+        vec3(0.5), vec3(0.5), vec3(0.8, 0.5, 1.0), vec3(0.1, 0.2, 0.3));
+    col *= pattern;
+    col *= tunnel * 0.4;
+    col += vec3(0.2, 0.05, 0.1) * smoothstep(0.0, 1.0, u_beat);
+    col += vec3(0.05) * u_treble / (r + 0.5);
+    fragColor = vec4(clamp(col, 0.0, 1.0), 1.0);
+}
+"""
+
+_FALLBACK_WAVES = """\
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+float noise(vec2 p) {
+    vec2 i = floor(p);
+    vec2 f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+}
+
+float fbm(vec2 p) {
+    float v = 0.0;
+    float a = 0.5;
+    for (int i = 0; i < 5; i++) {
+        v += a * noise(p);
+        p *= 2.0;
+        a *= 0.5;
+    }
+    return v;
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = fragCoord / iResolution.xy;
+    vec2 p = uv * 4.0;
+    float t = iTime * 0.3;
+    p.x += t;
+    p += fbm(p + t * 0.2) * (0.5 + u_bass * 0.5);
+    float n = fbm(p);
+    float wave = sin(uv.y * 10.0 + n * 6.0 + t * 2.0 + u_mid * 3.0);
+    wave = smoothstep(0.0, 0.15, abs(wave - 0.3));
+    float warm = 1.0 - u_spectralCentroid;
+    vec3 c1 = vec3(0.1, 0.3, 0.6) * warm + vec3(0.5, 0.2, 0.7) * (1.0 - warm);
+    vec3 c2 = vec3(0.8, 0.4, 0.2) * warm + vec3(0.2, 0.6, 0.9) * (1.0 - warm);
+    vec3 col = mix(c1, c2, n);
+    col *= wave;
+    col += vec3(0.05, 0.02, 0.08) * u_energy * 2.0;
+    col += vec3(0.2) * smoothstep(0.0, 1.0, u_beat);
+    col += vec3(0.03) * u_treble;
+    fragColor = vec4(col, 1.0);
+}
+"""
+
+_FALLBACK_SPHERE = """\
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+    return a + b * cos(6.28318 * (c * t + d));
+}
+
+float sdSphere(vec3 p, float r) {
+    return length(p) - r;
+}
+
+float scene(vec3 p) {
+    float s = sdSphere(p, 1.0 + u_bass * 0.3);
+    float ground = p.y + 1.5;
+    return min(s, ground);
+}
+
+vec3 getNormal(vec3 p) {
+    vec2 e = vec2(0.001, 0.0);
+    return normalize(vec3(
+        scene(p + e.xyy) - scene(p - e.xyy),
+        scene(p + e.yxy) - scene(p - e.yxy),
+        scene(p + e.yyx) - scene(p - e.yyx)));
+}
+
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
+    float angle = iTime * 0.2;
+    vec3 ro = vec3(sin(angle) * 3.5, 1.0, cos(angle) * 3.5);
+    vec3 ta = vec3(0.0, 0.0, 0.0);
+    vec3 fwd = normalize(ta - ro);
+    vec3 right = normalize(cross(fwd, vec3(0.0, 1.0, 0.0)));
+    vec3 up = cross(right, fwd);
+    vec3 rd = normalize(fwd * 1.5 + right * uv.x + up * uv.y);
+    float t = 0.0;
+    for (int i = 0; i < 80; i++) {
+        float d = scene(ro + rd * t);
+        if (d < 0.001) break;
+        t += d;
+        if (t > 25.0) break;
+    }
+    vec3 col = vec3(0.02, 0.02, 0.05);
+    if (t < 25.0) {
+        vec3 p = ro + rd * t;
+        vec3 n = getNormal(p);
+        vec3 light = normalize(vec3(1.0, 2.0, -1.0));
+        float diff = max(dot(n, light), 0.0);
+        float spec = pow(max(dot(reflect(-light, n), -rd), 0.0), 32.0);
+        col = palette(p.y * 0.3 + iTime * 0.1 + u_spectralCentroid,
+            vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4), vec3(0.0, 0.15, 0.2));
+        col *= diff * 0.8 + 0.2;
+        col += vec3(0.8) * spec * u_treble;
+        col += vec3(0.15) * smoothstep(0.0, 1.0, u_beat);
+    }
+    col += vec3(0.01) * u_energy;
+    col *= 1.0 - 0.4 * length(uv);
+    fragColor = vec4(col, 1.0);
+}
+"""
+
+# Ordered list: (keywords, shader_code)
+_FALLBACK_LIBRARY: list[tuple[list[str], str]] = [
+    (["sphere", "3d", "ray", "orb", "planet", "ball"],
+     _FALLBACK_SPHERE),
+    (["tunnel", "warp", "speed", "hyper", "vortex", "portal"],
+     _FALLBACK_TUNNEL),
+    (["kaleidoscope", "geometric", "crystal", "mirror", "fractal",
+      "symmetry", "mandala"],
+     _FALLBACK_KALEIDOSCOPE),
+    (["ocean", "wave", "water", "flow", "fluid", "organic", "nature"],
+     _FALLBACK_WAVES),
+    ([], _FALLBACK_PLASMA),  # default
+]
+
+# Keep a simple default alias for the client-side fallback import
+_FALLBACK_SHADER = _FALLBACK_PLASMA
+
+
+def pick_fallback_shader(description: str = "") -> str:
+    """Pick a curated fallback shader based on description keywords."""
+    desc_lower = description.lower()
+    for keywords, shader in _FALLBACK_LIBRARY:
+        if not keywords:
+            continue
+        if any(kw in desc_lower for kw in keywords):
+            return shader
+    # Rotate through fallbacks based on hash of description
+    # so different descriptions get different visuals
+    idx = hash(description) % len(_FALLBACK_LIBRARY)
+    return _FALLBACK_LIBRARY[idx][1]
 
 
 def _interpolate(times: list[float], values: list[float], t: float) -> float:
@@ -166,38 +358,57 @@ class ShaderRenderService:
     ) -> dict:
         """Render a complete video from a GLSL shader + audio analysis.
 
-        Validates the shader first. If compilation fails, asks the LLM to fix
-        it (up to 3 retries). Falls back to a built-in shader on total failure.
-        The heavy GL + FFmpeg work runs in a thread to avoid blocking the event loop.
+        Validates the shader first.  If compilation fails, asks the LLM
+        to fix it (up to 2 retries).  Falls back to a curated shader on
+        total failure.  The heavy GL + FFmpeg work runs in a thread.
         """
-        # Validate shader and retry via LLM if compilation fails
-        compile_err = await asyncio.to_thread(self._try_compile, shader_code)
+        compile_err = await asyncio.to_thread(
+            self._try_compile, shader_code,
+        )
         if compile_err:
-            logger.warning("Shader failed to compile, requesting LLM fix: %s", compile_err)
+            logger.warning(
+                "Shader failed to compile, requesting LLM fix: %s",
+                compile_err,
+            )
             from app.services.llm_service import LLMService
+
             llm = LLMService()
-            broken_code = shader_code  # keep original for LLM context
-            for retry in range(3):
-                fixed = await llm.generate_shader(
-                    description="Fix the shader compilation error",
-                    retry_error=compile_err,
+            desc = (
+                render_spec.global_style.shader_description
+                or "audio-reactive visualization"
+            )
+            broken_code = shader_code
+            for retry in range(2):
+                fixed = await llm.fix_shader(
                     previous_code=broken_code,
+                    compile_error=compile_err,
+                    description=desc,
                 )
                 if not fixed:
                     break
-                retry_err = await asyncio.to_thread(self._try_compile, fixed)
+                retry_err = await asyncio.to_thread(
+                    self._try_compile, fixed,
+                )
                 if retry_err is None:
-                    logger.info("LLM-fixed shader compiled on retry %d", retry + 1)
+                    logger.info(
+                        "LLM-fixed shader compiled on retry %d",
+                        retry + 1,
+                    )
                     shader_code = fixed
                     compile_err = None
                     break
-                logger.warning("LLM retry %d still fails: %s", retry + 1, retry_err)
-                broken_code = fixed  # give the LLM its latest attempt
+                logger.warning(
+                    "LLM retry %d still fails: %s",
+                    retry + 1, retry_err,
+                )
+                broken_code = fixed
                 compile_err = retry_err
 
             if compile_err:
-                logger.warning("All retries failed, using fallback shader")
-                shader_code = _FALLBACK_SHADER
+                logger.warning(
+                    "All retries failed, using fallback shader",
+                )
+                shader_code = pick_fallback_shader(desc)
 
         return await asyncio.to_thread(
             self._render_blocking,

@@ -201,11 +201,13 @@ IMPORTANT:
 # The shader generation system prompt — this is the core of the visual engine.
 # Based on ShaderGen (arxiv 2512.08951) and Shadertoy best practices.
 SHADER_SYSTEM_PROMPT = """\
-You are a legendary demoscene artist and Shadertoy programmer. Your GLSL shaders have won \
-competitions for their stunning beauty, technical sophistication, and musical responsiveness. \
-You create art that lives at the intersection of mathematics, music, and visual poetry.
+You are a legendary demoscene artist and Shadertoy programmer. Your GLSL \
+shaders have won competitions for their stunning beauty, technical \
+sophistication, and musical responsiveness. You create art that lives at \
+the intersection of mathematics, music, and visual poetry.
 
-You write a single GLSL fragment shader function: void mainImage(out vec4 fragColor, in vec2 fragCoord)
+You write a single GLSL fragment shader function:
+  void mainImage(out vec4 fragColor, in vec2 fragCoord)
 You may include any number of helper functions above mainImage.
 
 ## UNIFORMS (already declared — do NOT redeclare)
@@ -218,184 +220,111 @@ uniform float u_mid;              // mid band energy        [0,1]
 uniform float u_highMid;          // high-mid band energy   [0,1]
 uniform float u_treble;           // treble band energy     [0,1]
 uniform float u_energy;           // overall RMS amplitude  [0,1]
-uniform float u_beat;             // beat pulse intensity    [0,1] spikes on beat
+uniform float u_beat;             // beat pulse intensity    [0,1]
 uniform float u_spectralCentroid; // spectral brightness    [0,1]
 
 ## AESTHETIC DEFAULTS — Smooth & Cinematic
 
-Unless told otherwise, aim for SMOOTH, FLOWING, CINEMATIC visuals:
-- Prefer gradual transitions over abrupt jumps. Multiply audio uniforms by small coefficients \
-  (0.1–0.4) so they modulate gently, not violently.
-- Avoid strobing, rapid flashing, or harsh screen shakes. Smooth easing is always better.
-- Beat sync should feel organic — a slow bloom or gentle pulse, not a jarring flash. \
-  Mix u_beat through smoothstep or exponential decay rather than using it raw.
-- Slow camera movement (dolly, gentle orbit, drift) is preferred over fast or jerky motion.
-- Color shifts should be gradual and layered, not instantaneous palette swaps.
-- Think "underwater" or "breathing" — the visual should feel alive but calm.
+- Multiply audio uniforms by 0.1-0.4 for gentle modulation.
+- Beat sync: smoothstep or pow, not raw values.
+- Gradual color shifts, no strobing.
 
-## AUDIO-VISUAL MAPPING GUIDELINES
+## AUDIO-VISUAL MAPPING
 
-Map audio features to visual parameters with intention and subtlety:
-- u_bass:  Gentle radius pulsing, slow domain warping, low-frequency sway. \
-  Scale influence: typically bass * 0.2–0.4 for displacement.
-- u_mid:   Color modulation, pattern density shifts, surface texture. \
-  Mid drives the body of the visualization at moderate intensity.
-- u_treble: Fine detail — crystal facets, sparkle, shimmer, subtle particle jitter. \
-  Treble adds delicacy. Keep multipliers small (0.1–0.3).
-- u_beat:  Smooth bloom or gentle emphasis — NOT a hard flash. \
-  Use smoothstep(0.0, 1.0, u_beat) or pow(u_beat, 2.0) to soften the spike.
-- u_energy: Overall brightness, glow intensity, fog density, scene activity level.
-- u_spectralCentroid: Color temperature shifts (low = warm amber/red, high = cool blue/cyan).
+- u_bass:  radius pulsing, domain warping (scale 0.2-0.4)
+- u_mid:   color modulation, pattern density
+- u_treble: fine detail, shimmer (scale 0.1-0.3)
+- u_beat:  smooth bloom via smoothstep(0.0, 1.0, u_beat)
+- u_energy: overall brightness, glow
+- u_spectralCentroid: color temperature (low=warm, high=cool)
 
-## TECHNIQUE TOOLKIT
+## TECHNIQUES
 
-Choose appropriate techniques based on the description. You have the full Shadertoy arsenal:
+You have the full Shadertoy arsenal:
+- Raymarching + SDFs (sphere, box, torus, smooth-union, domain rep)
+- Fractals (Mandelbulb, Julia, IFS, Menger sponge)
+- Noise (Perlin, fbm, Voronoi, domain warping, curl noise)
+- 2D (polar transforms, tunnels, flow fields, Lissajous)
+- Rendering (iq palette, Blinn-Phong, Fresnel, bloom, vignette)
+- Particles (hash grids, glow accumulation)
 
-### 3D Scenes (Raymarching + SDFs)
-- Sphere tracing with signed distance functions
-- SDF primitives: sphere, box, torus, cylinder, cone, capsule, octahedron
-- SDF operations: union, subtraction, intersection, smooth-union (smin), smooth-subtraction
-- Domain repetition (mod) for infinite grids — THIS is how you get "1000s of objects"
-- Domain folding for kaleidoscopic/fractal symmetry
-- Twist, bend, displacement operations on SDFs
-- Soft shadows via SDF penumbra estimation
-- Ambient occlusion from SDF marching
-- Camera: orbit, dolly, smooth noise path
+## ABSOLUTE RULES (#version 330)
 
-### Fractals
-- Mandelbulb, Mandelbox, Julia sets (2D & 3D)
-- IFS (Iterated Function System) fractals
-- Menger sponge, Sierpinski triangle/tetrahedron
-- Fractal flame algorithms
-- Escape-time coloring with orbit traps
+Your code is injected into a wrapper that provides #version 330, \
+precision, all uniforms, out vec4 fragColor, and void main(). \
+You provide ONLY helper functions + mainImage.
 
-### Noise & Procedural
-- Perlin/simplex noise, value noise
-- Fractal Brownian Motion (fbm) — layered octaves of noise
-- Voronoi/Worley noise for cellular patterns
-- Domain warping (feeding noise output as input coordinates)
-- Curl noise for fluid-like motion
-- Reaction-diffusion patterns (Turing, Gray-Scott approximations)
+1.  NO texture/iChannel/sampler2D/dFdx/dFdy/fwidth
+2.  ALL float literals need a decimal point: 1.0 not 1
+3.  Return types MUST match function signature exactly
+4.  void functions: use `return;` — NEVER `return void;`
+5.  Do NOT redeclare uniforms/out vec4 fragColor/void main()
+6.  No #version or precision directives
+7.  Match ALL parentheses and braces — count them
+8.  for-loop bounds must be compile-time constants
+9.  Function calls MUST match the defined signature \
+    (same number and types of arguments)
+10. NEVER pass an int where a float is expected
 
-### 2D Effects
-- Polar coordinate transforms (radial patterns)
-- UV distortion fields
-- Feedback/tunnel effects
-- Moiré patterns
-- Parametric curves (Lissajous, spirograph)
-- Flow fields
-
-### Rendering Quality
-- Iq's palette function: vec3 pal(float t,vec3 a,vec3 b,vec3 c,vec3 d){return a+b*cos(6.28318*(c*t+d));}
-- Physically-based lighting (Blinn-Phong, PBR approximations)
-- Fresnel rim lighting
-- God rays (screen-space radial blur)
-- Bloom via multi-sample blur
-- Vignette, chromatic aberration, film grain
-- Tone mapping (ACES, Reinhard)
-- Gamma correction
-
-### Particle Simulation in Fragment Shader
-- Use hash functions + floor(coord) to create virtual particle grids
-- Each "particle" has a unique seed → position, velocity, color, size
-- Accumulate glow from nearby particles: glow += brightness / distance
-- Can simulate 100s–1000s of particles per pixel
-- Combine with noise for organic trails and flocking behavior
-
-## CRITICAL CONSTRAINTS (#version 330 core)
-
-The wrapper compiles your code as #version 330, which is STRICT about types.
-
-1. NO texture(), iChannel, sampler2D, dFdx, dFdy, fwidth
-2. ALL numeric literals must match their type — 1.0 not 1, 0.0 not 0 (except int loop counters)
-3. Return values MUST exactly match the function return type — no implicit conversion. \
-   A float function must return a float (return 0.0; NOT return 0;), \
-   a vec3 function must return vec3, etc. #version 330 does NOT allow implicit type casts in return.
-4. Function arguments must match parameter types exactly — pass 0.0 not 0 for float params
-5. Initialize ALL variables before use
-6. Array sizes must be compile-time constants
-7. for-loop bounds must be compile-time constants (e.g. for(int i=0;i<64;i++))
-8. No recursive function calls
-9. Return type of mainImage is void — write to fragColor parameter. \
-   Never write `return void;` or `void(...)` — void is NOT a value or constructor.
-10. Keep total loop iterations reasonable (max ~200 combined ray steps + noise octaves)
-11. No #version directive — the wrapper handles it
-12. Use explicit float() or int() casts when mixing types (e.g. float(myInt) * 2.0)
-13. Do NOT redeclare uniforms (iTime, iResolution, u_bass, etc.) — they are already declared by the wrapper
-14. Do NOT declare `out vec4 fragColor;` — the wrapper declares it
-15. Do NOT write a `void main()` function — the wrapper provides one that calls your mainImage
-16. Every opening parenthesis ( must have a matching closing parenthesis ). \
-    Every opening brace {{ must have a matching closing brace }}. Count them carefully.
-17. Helper functions that return a value MUST have a return statement on every code path
-
-## COMPLETE WORKING EXAMPLE
-
-This example shows the exact format your output should follow — helper functions first, then \
-mainImage. Study the bracket matching, float literals, and function signatures carefully:
+## WORKING EXAMPLE (raymarched scene — 60 lines)
 
 ```
-vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {
+vec3 palette(float t, vec3 a, vec3 b, vec3 c, vec3 d) {{
     return a + b * cos(6.28318 * (c * t + d));
-}
+}}
 
-float sdSphere(vec3 p, float r) {
+float sdSphere(vec3 p, float r) {{
     return length(p) - r;
-}
+}}
 
-float scene(vec3 p) {
+float scene(vec3 p) {{
     float sphere = sdSphere(p, 1.0 + u_bass * 0.3);
     float ground = p.y + 1.0;
     return min(sphere, ground);
-}
+}}
 
-vec3 getNormal(vec3 p) {
+vec3 getNormal(vec3 p) {{
     vec2 e = vec2(0.001, 0.0);
     return normalize(vec3(
         scene(p + e.xyy) - scene(p - e.xyy),
         scene(p + e.yxy) - scene(p - e.yxy),
         scene(p + e.yyx) - scene(p - e.yyx)
     ));
-}
+}}
 
-void mainImage(out vec4 fragColor, in vec2 fragCoord) {
-    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);
-
+void mainImage(out vec4 fragColor, in vec2 fragCoord) {{
+    vec2 uv = (fragCoord * 2.0 - iResolution.xy) \
+/ min(iResolution.x, iResolution.y);
     vec3 ro = vec3(0.0, 0.0, -3.0 + u_energy * 0.5);
     vec3 rd = normalize(vec3(uv, 1.5));
-
     float t = 0.0;
-    for (int i = 0; i < 64; i++) {
+    for (int i = 0; i < 64; i++) {{
         vec3 p = ro + rd * t;
         float d = scene(p);
         if (d < 0.001) break;
         t += d;
         if (t > 20.0) break;
-    }
-
+    }}
     vec3 col = vec3(0.0);
-    if (t < 20.0) {
+    if (t < 20.0) {{
         vec3 p = ro + rd * t;
         vec3 n = getNormal(p);
-        vec3 light = normalize(vec3(1.0, 1.0, -1.0));
-        float diff = max(dot(n, light), 0.0);
-        col = palette(
-            t * 0.1 + iTime * 0.1 + u_spectralCentroid,
-            vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4), vec3(0.0, 0.15, 0.2)
-        ) * diff;
+        float diff = max(dot(n, normalize(vec3(1.0, 1.0, -1.0))), 0.0);
+        col = palette(t * 0.1 + iTime * 0.1 + u_spectralCentroid,
+            vec3(0.5), vec3(0.5), vec3(1.0, 0.7, 0.4),
+            vec3(0.0, 0.15, 0.2)) * diff;
         col += vec3(0.15) * smoothstep(0.0, 1.0, u_beat);
-    }
-
+    }}
     col += vec3(0.02) * u_treble;
-    float vig = 1.0 - smoothstep(0.4, 1.4, length(uv));
-    col *= vig;
+    col *= 1.0 - smoothstep(0.4, 1.4, length(uv));
     fragColor = vec4(col, 1.0);
-}
+}}
 ```
 
-## OUTPUT FORMAT
+## OUTPUT
 
-Output ONLY valid GLSL code. No markdown fences, no backticks, no explanation, no comments \
-about uniforms. Start directly with helper functions (if any), then mainImage.\
+Output ONLY valid GLSL code. No markdown fences, no backticks, \
+no explanation. Helper functions first, then mainImage.\
 """
 
 
@@ -709,89 +638,23 @@ End with 1-2 follow-up questions to refine the concept."""
 
         return None
 
-    async def generate_shader(
+    async def _call_shader_llm(
         self,
-        description: str,
-        mood_tags: list[str] | None = None,
-        color_palette: list[str] | None = None,
-        retry_error: str | None = None,
-        previous_code: str | None = None,
+        user_prompt: str,
+        temperature: float = 0.8,
     ) -> str | None:
-        """Generate a Shadertoy-compatible GLSL fragment shader from a description.
+        """Send a single shader-generation request to the LLM.
 
-        Returns the shader code body (mainImage function) or None on failure.
-        If *retry_error* is set (with *previous_code*), the LLM is asked to fix the
-        previous attempt.
+        Handles rate-limit retries internally. Returns sanitized GLSL or
+        ``None`` on total failure.
         """
         client = self._get_client()
-
-        mood_str = ", ".join(mood_tags) if mood_tags else "energetic, dynamic"
-        color_hint = ""
-        if color_palette:
-            color_hint = f"\nUse this color palette as the primary colors: {', '.join(color_palette)}"
-
-        if retry_error and previous_code:
-            user_prompt = (
-                "IMPORTANT CONTEXT: Your code is inserted into this wrapper:\n"
-                "```\n"
-                "#version 330\n"
-                "precision highp float;\n"
-                "uniform float iTime; uniform vec2 iResolution;\n"
-                "uniform float u_bass; uniform float u_lowMid; uniform float u_mid;\n"
-                "uniform float u_highMid; uniform float u_treble; uniform float u_energy;\n"
-                "uniform float u_beat; uniform float u_spectralCentroid;\n"
-                "out vec4 fragColor;\n\n"
-                "// YOUR CODE IS INSERTED HERE\n\n"
-                "void main() { mainImage(fragColor, gl_FragCoord.xy); }\n"
-                "```\n\n"
-                f"The following shader failed to compile:\n\n```glsl\n{previous_code}\n```\n\n"
-                f"Compiler error:\n{retry_error}\n\n"
-                "The error is likely caused by mismatched parentheses "
-                "or braces in a helper function, redeclared uniforms/"
-                "out variables, a #version directive, or a void main()"
-                " wrapper. Fix the error by carefully counting ALL "
-                "parentheses () and braces {{}}. "
-                "Every return type must match the function signature. "
-                "All float literals need a decimal point. "
-                "Do NOT include #version, precision, uniform "
-                "declarations, out vec4 fragColor;, or void main(). "
-                "Output ONLY the corrected GLSL code "
-                "(helper functions + mainImage). "
-                "No explanation, no markdown fences."
-            )
-        elif retry_error:
-            user_prompt = (
-                f"A shader failed to compile with this error:\n{retry_error}\n\n"
-                "Generate a new, simpler, correct shader. "
-                "Focus on getting it to compile cleanly. "
-                "Do NOT include #version, precision, uniform "
-                "declarations, out vec4 fragColor;, or void main(). "
-                "Output ONLY valid GLSL code (helper functions + mainImage). "
-                "No explanation, no markdown fences."
-            )
-        else:
-            user_prompt = (
-                f"Create a visually stunning, music-reactive GLSL fragment shader.\n\n"
-                f"Visual concept: {description}\n"
-                f"Mood: {mood_str}{color_hint}\n\n"
-                "Make it visually spectacular — this should look like award-winning Shadertoy art. "
-                "Use advanced techniques (raymarching, SDFs, fractals, domain repetition for "
-                "particle fields, fbm noise, etc.) appropriate to the description. "
-                "Every audio uniform should meaningfully drive some visual parameter.\n\n"
-                "Output ONLY the GLSL code (helper functions + mainImage). "
-                "No explanation, no markdown fences, no uniform declarations."
-            )
-
-        # Lower temperature on retries for more precise/careful output
-        temp = 0.7 if retry_error else 0.9
-
         config = types.GenerateContentConfig(
             system_instruction=SHADER_SYSTEM_PROMPT,
-            temperature=temp,
+            temperature=temperature,
             top_p=0.95,
             max_output_tokens=8192,
         )
-
         max_retries = 3
         for attempt in range(max_retries + 1):
             try:
@@ -801,17 +664,18 @@ End with 1-2 follow-up questions to refine the concept."""
                     config=config,
                 )
                 raw = response.text.strip()
-                # Sanitize the LLM output (strips fences, redeclared uniforms, etc.)
                 return sanitize_shader_code(raw)
-
             except ClientError as e:
                 if e.code == 429 and attempt < max_retries:
                     delay = 15.0
-                    match = _re.search(r"retry in ([\d.]+)s", str(e), _re.IGNORECASE)
-                    if match:
-                        delay = float(match.group(1)) + 1.0
+                    m = _re.search(
+                        r"retry in ([\d.]+)s", str(e), _re.IGNORECASE,
+                    )
+                    if m:
+                        delay = float(m.group(1)) + 1.0
                     logger.warning(
-                        "Rate limited on shader gen (attempt %d/%d), retrying in %.1fs",
+                        "Rate limited on shader gen "
+                        "(attempt %d/%d), retrying in %.1fs",
                         attempt + 1, max_retries, delay,
                     )
                     await asyncio.sleep(delay)
@@ -821,5 +685,104 @@ End with 1-2 follow-up questions to refine the concept."""
             except Exception:
                 logger.exception("Error generating shader")
                 return None
-
         return None
+
+    async def generate_shader(
+        self,
+        description: str,
+        mood_tags: list[str] | None = None,
+        color_palette: list[str] | None = None,
+    ) -> str | None:
+        """Generate a new shader (initial attempt, no error context)."""
+        mood_str = (
+            ", ".join(mood_tags) if mood_tags else "energetic, dynamic"
+        )
+        color_hint = ""
+        if color_palette:
+            color_hint = (
+                "\nPrefer these colors: "
+                f"{', '.join(color_palette)}"
+            )
+        prompt = (
+            "Create a visually stunning, music-reactive GLSL "
+            "fragment shader.\n\n"
+            f"Visual concept: {description}\n"
+            f"Mood: {mood_str}{color_hint}\n\n"
+            "Use advanced techniques (raymarching, SDFs, "
+            "fractals, fbm noise, etc.) appropriate to the "
+            "description. Every audio uniform should drive "
+            "some visual parameter.\n\n"
+            "Output ONLY GLSL code. No markdown, no "
+            "explanation, no uniform declarations."
+        )
+        return await self._call_shader_llm(prompt, temperature=0.85)
+
+    async def fix_shader(
+        self,
+        previous_code: str,
+        compile_error: str,
+        description: str,
+    ) -> str | None:
+        """Ask the LLM to fix a broken shader, giving it the error."""
+        # Extract the line number from the error so the LLM can focus
+        line_match = _re.search(r"ERROR:\s*0:(\d+):", compile_error)
+        line_hint = ""
+        if line_match:
+            err_line = int(line_match.group(1))
+            # The wrapper adds ~16 lines before user code
+            user_line = max(1, err_line - 16)
+            lines = previous_code.splitlines()
+            start = max(0, user_line - 3)
+            end = min(len(lines), user_line + 3)
+            context_lines = "\n".join(
+                f"{'>>>' if i + 1 == user_line else '   '} "
+                f"{i + 1}: {lines[i]}"
+                for i in range(start, end)
+            )
+            line_hint = (
+                f"\nThe error is near line {user_line} of your "
+                f"code:\n```\n{context_lines}\n```\n"
+            )
+
+        prompt = (
+            "The following shader FAILED to compile. Fix it.\n\n"
+            f"Compiler error:\n{compile_error}\n"
+            f"{line_hint}\n"
+            f"Broken shader:\n```glsl\n{previous_code}\n```\n\n"
+            "REMEMBER: The wrapper already provides #version 330, "
+            "all uniforms, out vec4 fragColor, and void main(). "
+            "Do NOT redeclare any of those.\n\n"
+            "Common causes:\n"
+            "- Mismatched () or {{}} in a helper function\n"
+            "- `return void;` instead of `return;`\n"
+            "- Function call with wrong argument types\n"
+            "- Integer literal where float is needed\n\n"
+            "Output ONLY the complete corrected GLSL code. "
+            "No markdown, no explanation."
+        )
+        return await self._call_shader_llm(prompt, temperature=0.4)
+
+    async def generate_shader_simple(
+        self,
+        description: str,
+        mood_tags: list[str] | None = None,
+    ) -> str | None:
+        """Generate a simpler shader as a last-resort attempt.
+
+        Asks the LLM for a clean 2D effect (no raymarching) that is
+        easy to compile correctly.
+        """
+        mood_str = (
+            ", ".join(mood_tags) if mood_tags else "energetic, dynamic"
+        )
+        prompt = (
+            "Create a beautiful 2D audio-reactive GLSL shader.\n\n"
+            f"Theme: {description}\n"
+            f"Mood: {mood_str}\n\n"
+            "Use ONLY 2D techniques: polar coordinates, domain "
+            "warping, fbm noise, iq palette, sin/cos patterns. "
+            "NO raymarching, NO SDFs, NO 3D. Keep it under 50 "
+            "lines. Focus on getting it to compile correctly.\n\n"
+            "Output ONLY GLSL code. No markdown."
+        )
+        return await self._call_shader_llm(prompt, temperature=0.5)
