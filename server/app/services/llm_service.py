@@ -221,17 +221,29 @@ uniform float u_energy;           // overall RMS amplitude  [0,1]
 uniform float u_beat;             // beat pulse intensity    [0,1] spikes on beat
 uniform float u_spectralCentroid; // spectral brightness    [0,1]
 
+## AESTHETIC DEFAULTS — Smooth & Cinematic
+
+Unless told otherwise, aim for SMOOTH, FLOWING, CINEMATIC visuals:
+- Prefer gradual transitions over abrupt jumps. Multiply audio uniforms by small coefficients \
+  (0.1–0.4) so they modulate gently, not violently.
+- Avoid strobing, rapid flashing, or harsh screen shakes. Smooth easing is always better.
+- Beat sync should feel organic — a slow bloom or gentle pulse, not a jarring flash. \
+  Mix u_beat through smoothstep or exponential decay rather than using it raw.
+- Slow camera movement (dolly, gentle orbit, drift) is preferred over fast or jerky motion.
+- Color shifts should be gradual and layered, not instantaneous palette swaps.
+- Think "underwater" or "breathing" — the visual should feel alive but calm.
+
 ## AUDIO-VISUAL MAPPING GUIDELINES
 
-Map audio features to visual parameters with intention:
-- u_bass:  Large-scale displacement, radius pulsing, camera shake, ground heaving, \
-  low-frequency domain warping. Bass is POWER — it should drive the biggest movements.
-- u_mid:   Pattern density, color modulation, surface texture frequency, secondary motion. \
-  Mid drives the body of the visualization.
-- u_treble: Fine detail — crystal facets, sparkle, high-frequency noise, small particle jitter, \
-  glint effects, edge shimmer. Treble is PRECISION.
-- u_beat:  Sudden transformations — flash/bloom, kaleidoscope fold count change, color palette \
-  snap rotation, momentary geometry shift. Beats are IMPACT.
+Map audio features to visual parameters with intention and subtlety:
+- u_bass:  Gentle radius pulsing, slow domain warping, low-frequency sway. \
+  Scale influence: typically bass * 0.2–0.4 for displacement.
+- u_mid:   Color modulation, pattern density shifts, surface texture. \
+  Mid drives the body of the visualization at moderate intensity.
+- u_treble: Fine detail — crystal facets, sparkle, shimmer, subtle particle jitter. \
+  Treble adds delicacy. Keep multipliers small (0.1–0.3).
+- u_beat:  Smooth bloom or gentle emphasis — NOT a hard flash. \
+  Use smoothstep(0.0, 1.0, u_beat) or pow(u_beat, 2.0) to soften the spike.
 - u_energy: Overall brightness, glow intensity, fog density, scene activity level.
 - u_spectralCentroid: Color temperature shifts (low = warm amber/red, high = cool blue/cyan).
 
@@ -308,6 +320,12 @@ The wrapper compiles your code as #version 330, which is STRICT about types.
 10. Keep total loop iterations reasonable (max ~200 combined ray steps + noise octaves)
 11. No #version directive — the wrapper handles it
 12. Use explicit float() or int() casts when mixing types (e.g. float(myInt) * 2.0)
+13. Do NOT redeclare uniforms (iTime, iResolution, u_bass, etc.) — they are already declared by the wrapper
+14. Do NOT declare `out vec4 fragColor;` — the wrapper declares it
+15. Do NOT write a `void main()` function — the wrapper provides one that calls your mainImage
+16. Every opening parenthesis ( must have a matching closing parenthesis ). \
+    Every opening brace {{ must have a matching closing brace }}. Count them carefully.
+17. Helper functions that return a value MUST have a return statement on every code path
 
 ## OUTPUT FORMAT
 
@@ -576,11 +594,13 @@ End with 1-2 follow-up questions to refine the concept."""
         mood_tags: list[str] | None = None,
         color_palette: list[str] | None = None,
         retry_error: str | None = None,
+        previous_code: str | None = None,
     ) -> str | None:
         """Generate a Shadertoy-compatible GLSL fragment shader from a description.
 
         Returns the shader code body (mainImage function) or None on failure.
-        If *retry_error* is set, the LLM is asked to fix the previous attempt.
+        If *retry_error* is set (with *previous_code*), the LLM is asked to fix the
+        previous attempt.
         """
         client = self._get_client()
 
@@ -589,11 +609,20 @@ End with 1-2 follow-up questions to refine the concept."""
         if color_palette:
             color_hint = f"\nUse this color palette as the primary colors: {', '.join(color_palette)}"
 
-        if retry_error:
+        if retry_error and previous_code:
             user_prompt = (
-                f"The previous shader failed to compile with this error:\n{retry_error}\n\n"
-                "Please fix the shader. Output ONLY the corrected GLSL code for the mainImage function, "
-                "no explanation, no markdown fences."
+                f"The following shader failed to compile:\n\n```glsl\n{previous_code}\n```\n\n"
+                f"Compiler error:\n{retry_error}\n\n"
+                "Fix the error. Double-check every function's parentheses and braces are matched, "
+                "every return type matches the function signature, and all float literals use a decimal point. "
+                "Output ONLY the corrected GLSL code (helper functions + mainImage). "
+                "No explanation, no markdown fences, no uniform declarations."
+            )
+        elif retry_error:
+            user_prompt = (
+                f"A shader failed to compile with this error:\n{retry_error}\n\n"
+                "Generate a new, correct shader. Output ONLY valid GLSL code (helper functions + mainImage). "
+                "No explanation, no markdown fences, no uniform declarations."
             )
         else:
             user_prompt = (
@@ -608,9 +637,12 @@ End with 1-2 follow-up questions to refine the concept."""
                 "No explanation, no markdown fences, no uniform declarations."
             )
 
+        # Lower temperature on retries for more precise/careful output
+        temp = 0.7 if retry_error else 0.9
+
         config = types.GenerateContentConfig(
             system_instruction=SHADER_SYSTEM_PROMPT,
-            temperature=0.9,
+            temperature=temp,
             top_p=0.95,
             max_output_tokens=8192,
         )

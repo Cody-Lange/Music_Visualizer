@@ -5,7 +5,7 @@ import { useAudioStore } from "@/stores/audio-store";
 import { useVisualizerStore } from "@/stores/visualizer-store";
 
 interface ChatWsContextType {
-  sendMessage: (content: string) => void;
+  sendMessage: (content: string, renderConfirm?: boolean) => void;
   isConnected: boolean;
 }
 
@@ -138,8 +138,8 @@ export function ChatWebSocketProvider({ children }: { children: ReactNode }) {
     };
   }, [sessionId, jobId]);
 
-  const sendMessage = useCallback((content: string) => {
-    wsRef.current?.sendChatMessage(content);
+  const sendMessage = useCallback((content: string, renderConfirm?: boolean) => {
+    wsRef.current?.sendChatMessage(content, renderConfirm);
   }, []);
 
   return (

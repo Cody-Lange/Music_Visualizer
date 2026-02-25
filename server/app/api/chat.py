@@ -115,10 +115,9 @@ def _detect_phase_transition(
         return "refinement"
 
     if phase == "editing":
-        # User wants to re-render from editor
-        if _CONFIRM_PATTERNS.search(user_content):
-            return "rendering"
-        # Otherwise stay in editing for further refinement
+        # In editing phase, re-rendering requires an explicit button press
+        # (handled before this function via render_confirm flag).
+        # Text messages always stay in editing for conversational refinement.
         return "editing"
 
     # rendering phase stays as-is until explicitly changed
@@ -185,10 +184,17 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
             context = _build_analysis_context(job_id) if job_id else ""
 
             # Early detection: if user is confirming render, skip streaming
-            # the JSON and go straight to render spec extraction
+            # the JSON and go straight to render spec extraction.
+            # In the editing phase, require an explicit button press
+            # (render_confirm flag) so casual conversation doesn't
+            # accidentally trigger expensive renders.
+            render_confirmed_by_button = data.get("render_confirm", False)
             will_render = (
                 phase in ("confirmation", "editing")
-                and _CONFIRM_PATTERNS.search(user_content)
+                and (
+                    render_confirmed_by_button
+                    or (phase != "editing" and _CONFIRM_PATTERNS.search(user_content))
+                )
             )
 
             if will_render:

@@ -21,6 +21,7 @@ export interface WsMessage {
   job_id?: string;
   phase?: ChatPhase;
   render_spec?: Record<string, unknown>;
+  render_confirm?: boolean;
 }
 
 type MessageHandler = (message: WsMessage) => void;
@@ -81,8 +82,8 @@ export class ChatWebSocket {
     }
   }
 
-  sendChatMessage(content: string): void {
-    this.send({ type: "message", content });
+  sendChatMessage(content: string, renderConfirm?: boolean): void {
+    this.send({ type: "message", content, ...(renderConfirm ? { render_confirm: true } : {}) });
   }
 
   bindJob(jobId: string): void {

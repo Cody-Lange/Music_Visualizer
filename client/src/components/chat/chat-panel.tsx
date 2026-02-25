@@ -64,11 +64,11 @@ function getPlaceholder(phase: ChatPhase, hasAnalysis: boolean): string {
   }
 }
 
-function ActionButtons({ onAction }: { onAction: (text: string) => void }) {
+function ActionButtons({ onAction, onRender }: { onAction: (text: string) => void; onRender: () => void }) {
   return (
     <div className="mx-auto flex max-w-md flex-wrap items-center justify-center gap-2 py-2">
       <button
-        onClick={() => onAction("Render it")}
+        onClick={onRender}
         className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-4 py-2 text-sm font-medium text-white transition hover:bg-accent-hover"
       >
         <Play size={14} />
@@ -222,6 +222,21 @@ export function ChatPanel() {
     sendMessage(text);
   }, [isStreaming, addMessage, sendMessage]);
 
+  const handleRenderButton = useCallback(() => {
+    if (isStreaming) return;
+
+    addMessage({
+      id: createMessageId(),
+      role: "user",
+      content: "Render it",
+      timestamp: Date.now(),
+    });
+
+    // Send with render_confirm flag so the server knows this is an
+    // explicit button press, not casual conversation text
+    sendMessage("Render it", true);
+  }, [isStreaming, addMessage, sendMessage]);
+
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -259,7 +274,7 @@ export function ChatPanel() {
 
         {/* Action buttons in confirmation and editing phases */}
         {(phase === "confirmation" || phase === "editing") && !isStreaming && (
-          <ActionButtons onAction={handleActionButton} />
+          <ActionButtons onAction={handleActionButton} onRender={handleRenderButton} />
         )}
 
         {renderSpec && phase === "rendering" && !renderError && !downloadUrl && (

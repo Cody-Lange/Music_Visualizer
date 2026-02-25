@@ -176,10 +176,12 @@ class ShaderRenderService:
             logger.warning("Shader failed to compile, requesting LLM fix: %s", compile_err)
             from app.services.llm_service import LLMService
             llm = LLMService()
+            broken_code = shader_code  # keep original for LLM context
             for retry in range(2):
                 fixed = await llm.generate_shader(
                     description="Fix the shader compilation error",
                     retry_error=compile_err,
+                    previous_code=broken_code,
                 )
                 if not fixed:
                     break
@@ -190,6 +192,7 @@ class ShaderRenderService:
                     compile_err = None
                     break
                 logger.warning("LLM retry %d still fails: %s", retry + 1, retry_err)
+                broken_code = fixed  # give the LLM its latest attempt
                 compile_err = retry_err
 
             if compile_err:
