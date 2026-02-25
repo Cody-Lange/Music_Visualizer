@@ -12,11 +12,14 @@ export function PreviewPanel() {
       {/* Visualizer */}
       <div className="relative flex-1 bg-black">
         {downloadUrl ? (
-          <video
-            src={downloadUrl}
-            controls
-            className="h-full w-full object-contain"
-          />
+          <div className="flex h-full items-center justify-center p-4">
+            <video
+              src={downloadUrl}
+              controls
+              className="max-h-full max-w-full rounded-lg object-contain"
+              style={{ maxHeight: "min(100%, 50vh)" }}
+            />
+          </div>
         ) : (
           <VisualizerCanvas />
         )}

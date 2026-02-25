@@ -62,6 +62,22 @@ _MOTION_PARAMS: dict[str, dict[str, str]] = {
 }
 
 
+_TRANS_DUR = 0.5  # Default crossfade transition duration (seconds)
+
+# Map render spec transition types to FFmpeg xfade transition names
+_XFADE_MAP: dict[str, str] = {
+    "fade-from-black": "fadeblack",
+    "fade-to-black": "fadeblack",
+    "cross-dissolve": "dissolve",
+    "hard-cut": "fade",
+    "morph": "smoothleft",
+    "flash-white": "fadewhite",
+    "wipe": "wiperight",
+    "zoom-in": "zoomin",
+    "zoom-out": "circleclose",
+}
+
+
 def _hex_to_ffmpeg(hex_color: str) -> str:
     """Convert #RRGGBB to 0xRRGGBB for FFmpeg."""
     return "0x" + hex_color.lstrip("#")
@@ -116,12 +132,17 @@ class RenderService:
             render_id, template, len(render_spec.sections),
         )
 
-        # Graceful degradation: full graph → full without beats → simple → minimal
-        for attempt_label, use_beats in [("full", True), ("full-no-beats", False)]:
+        # Graceful degradation: full → no-beats → no-transitions → simple → minimal
+        for attempt_label, use_beats, use_xfade in [
+            ("full", True, True),
+            ("full-no-beats", False, True),
+            ("full-no-transitions", False, False),
+        ]:
             filter_complex = self._build_full_filter_graph(
                 render_spec, template, duration, width, height, fps,
                 beats if use_beats else [],
                 keyframe_input_map,
+                use_xfade=use_xfade,
             )
 
             cmd = [
@@ -181,14 +202,21 @@ class RenderService:
         fps: int,
         beats: list[float],
         keyframe_input_map: dict[str, int],
+        use_xfade: bool = True,
     ) -> str:
         """Build a comprehensive FFmpeg filter_complex.
 
-        Per-section: AI keyframe image (if available) OR gradient + procedural
-        overlay, then motion + transitions.  Concatenate, beat-flash, output.
+        Per-section pipeline:
+        1. Gradient background
+        2. AI keyframe overlay (if available) OR procedural effect blend
+        3. Dynamic color effects (hue cycling, vignette) for keyframe sections
+        4. Zoompan motion with per-section variation
+        5. Smooth xfade transitions between sections (or concat fallback)
+        6. Beat-synced flash overlay
         """
         filters: list[str] = []
         section_out_labels: list[str] = []
+        section_durations: list[float] = []
 
         if not render_spec.sections:
             color = self._template_base_color(template)
@@ -196,6 +224,9 @@ class RenderService:
                 f"[0:v]drawbox=x=0:y=0:w={width}:h={height}:color={color}@0.8"
                 f":t=fill[vout]"
             )
+
+        n_sections = len(render_spec.sections)
+        trans_dur = _TRANS_DUR if use_xfade and n_sections > 1 else 0
 
         for i, section in enumerate(render_spec.sections):
             s = f"s{i}"
@@ -207,11 +238,19 @@ class RenderService:
             intensity = section.intensity
             kf_idx = keyframe_input_map.get(section.label)
 
+            # Extend section duration for transition overlap
+            actual_dur = sec_dur
+            if trans_dur > 0:
+                if i > 0:
+                    actual_dur += trans_dur / 2
+                if i < n_sections - 1:
+                    actual_dur += trans_dur / 2
+
             # ── Layer 1: section-unique gradient background ──
             top_h = height // 2 + int(height * 0.1 * math.sin(i * 1.7))
             bot_h = height - top_h
             filters.append(
-                f"color=c=#{c0}:s={width}x{height}:d={sec_dur}:r={fps},"
+                f"color=c=#{c0}:s={width}x{height}:d={actual_dur}:r={fps},"
                 f"drawbox=x=0:y=0:w={width}:h={top_h}:color=0x{c1}@0.45:t=fill,"
                 f"drawbox=x=0:y={top_h}:w={width}:h={bot_h}:color=0x{c2}@0.35:t=fill"
                 f"[{s}_bg]"
@@ -223,17 +262,30 @@ class RenderService:
                     f"[{kf_idx}:v]scale={width}:{height}"
                     f":force_original_aspect_ratio=decrease,"
                     f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-                    f"setsar=1,trim=duration={sec_dur},setpts=PTS-STARTPTS,"
+                    f"setsar=1,trim=duration={actual_dur},setpts=PTS-STARTPTS,"
                     f"format=yuva420p[{s}_kf]"
                 )
                 filters.append(
                     f"[{s}_bg]format=yuva420p[{s}_bgf];"
                     f"[{s}_bgf][{s}_kf]overlay=0:0:format=auto[{s}_comp]"
                 )
+
+                # ── Dynamic color effects for keyframe sections ──
+                hue_period = max(actual_dur, 2.0)
+                hue_amp = 5 + intensity * 20
+                sat = 1 + intensity * 0.15
+                filters.append(
+                    f"[{s}_comp]"
+                    f"hue=H=sin(2*PI*t/{hue_period:.2f})*{hue_amp:.1f}"
+                    f":s={sat:.2f}+0.1*sin(2*PI*t/{hue_period:.2f}+1.5),"
+                    f"vignette=angle=PI/4"
+                    f"[{s}_fx]"
+                )
+                motion_in = f"{s}_fx"
             else:
                 # ── No keyframe: procedural effect layer ──
                 proc = self._procedural_effect(
-                    template, s, width, height, sec_dur, fps, intensity,
+                    template, s, width, height, actual_dur, fps, intensity,
                 )
                 if proc:
                     filters.append(proc)
@@ -244,32 +296,63 @@ class RenderService:
                     )
                 else:
                     filters.append(f"[{s}_bg]null[{s}_comp]")
+                motion_in = f"{s}_comp"
 
-            # ── Motion (zoompan) ──
+            # ── Motion (zoompan) with per-section phase variation ──
             motion = _MOTION_PARAMS.get(
                 section.motion_style, _MOTION_PARAMS["slow-drift"]
             )
+            phase = i * 37 % 100
+            x_expr = motion["x"].replace("on/", f"(on+{phase})/")
+            y_expr = motion["y"].replace("on/", f"(on+{phase})/")
+
             pad_w, pad_h = int(width * 1.25), int(height * 1.25)
-            total_frames = max(int(sec_dur * fps), 1)
+            total_frames = max(int(actual_dur * fps), 1)
             filters.append(
-                f"[{s}_comp]scale={pad_w}:{pad_h},"
+                f"[{motion_in}]scale={pad_w}:{pad_h},"
                 f"zoompan=z='{motion['z']}':"
-                f"x='{motion['x']}':y='{motion['y']}':"
-                f"d={total_frames}:s={width}x{height}:fps={fps}"
+                f"x='{x_expr}':y='{y_expr}':"
+                f"d={total_frames}:s={width}x{height}:fps={fps},"
+                f"format=yuv420p"
                 f"[{s}_out]"
             )
 
             section_out_labels.append(f"{s}_out")
+            section_durations.append(actual_dur)
 
-        # ── Concatenate all sections ──
-        concat_in = "".join(f"[{lbl}]" for lbl in section_out_labels)
-        n = len(section_out_labels)
-        filters.append(f"{concat_in}concat=n={n}:v=1:a=0[vmain]")
+        # ── Join sections: xfade transitions or concat ──
+        if n_sections == 1:
+            filters.append(f"[{section_out_labels[0]}]null[vmain]")
+        elif use_xfade:
+            current = section_out_labels[0]
+            running_dur = section_durations[0]
+            for i in range(1, n_sections):
+                next_lbl = section_out_labels[i]
+                t = min(
+                    trans_dur,
+                    section_durations[i - 1] / 3,
+                    section_durations[i] / 3,
+                )
+                offset = max(running_dur - t, 0)
+                trans_name = _XFADE_MAP.get(
+                    render_spec.sections[i].transition_in, "dissolve"
+                )
+                out_lbl = "vmain" if i == n_sections - 1 else f"x{i}"
+                filters.append(
+                    f"[{current}][{next_lbl}]xfade=transition={trans_name}"
+                    f":duration={t:.3f}:offset={offset:.3f}[{out_lbl}]"
+                )
+                current = out_lbl
+                running_dur += section_durations[i] - t
+        else:
+            concat_in = "".join(f"[{lbl}]" for lbl in section_out_labels)
+            filters.append(
+                f"{concat_in}concat=n={n_sections}:v=1:a=0[vmain]"
+            )
 
         # ── Beat-synced flash overlay ──
         beat_flash = self._beat_flash_filter(beats, width, height, fps)
         if beat_flash:
-            # Apply directly to the main stream — no separate source/blend
             filters.append(f"[vmain]{beat_flash}[vout]")
         else:
             filters.append("[vmain]null[vout]")

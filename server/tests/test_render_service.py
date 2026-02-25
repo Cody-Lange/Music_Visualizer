@@ -65,7 +65,7 @@ class TestFullFilterGraph:
         assert "[vout]" in filt
         assert "1A1A28" in filt
 
-    def test_sections_produce_concat(self):
+    def test_sections_produce_xfade(self):
         spec = RenderSpec(
             sections=[
                 SectionSpec(label="intro", start_time=0, end_time=30, color_palette=["#FF0000"]),
@@ -75,8 +75,34 @@ class TestFullFilterGraph:
         filt = self.service._build_full_filter_graph(
             spec, "nebula", 90.0, 1920, 1080, 30, [], {}
         )
+        assert "xfade=transition=" in filt
+        assert "[vout]" in filt
+
+    def test_sections_fallback_to_concat(self):
+        spec = RenderSpec(
+            sections=[
+                SectionSpec(label="intro", start_time=0, end_time=30, color_palette=["#FF0000"]),
+                SectionSpec(label="verse", start_time=30, end_time=90, color_palette=["#00FF00"]),
+            ]
+        )
+        filt = self.service._build_full_filter_graph(
+            spec, "nebula", 90.0, 1920, 1080, 30, [], {}, use_xfade=False
+        )
         assert "concat=n=2" in filt
         assert "[vout]" in filt
+
+    def test_keyframe_sections_have_hue_and_vignette(self):
+        spec = RenderSpec(
+            sections=[
+                SectionSpec(label="intro", start_time=0, end_time=30, intensity=0.7),
+            ]
+        )
+        # Section "intro" has a keyframe at input index 1
+        filt = self.service._build_full_filter_graph(
+            spec, "nebula", 30.0, 1920, 1080, 30, [], {"intro": 1}
+        )
+        assert "hue=H=sin" in filt
+        assert "vignette" in filt
 
     def test_beats_add_flash_layer(self):
         spec = RenderSpec(
