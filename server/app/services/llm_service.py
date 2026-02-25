@@ -225,7 +225,12 @@ helper functions + `void mainImage(out vec4 fragColor, in vec2 fragCoord)`.
 Available uniforms (do not redeclare):
   iTime, iResolution, u_bass, u_lowMid, u_mid, u_highMid,
   u_treble, u_energy, u_beat, u_spectralCentroid
-All audio uniforms are in [0,1]. No textures/samplers available.
+All audio uniforms are in [0,1]. NO textures or samplers are available.
+NEVER use texture(), sampler2D, sampler1D, or any texture sampling — \
+there are NO texture inputs. Generate all visuals procedurally.
+
+You MUST define `void mainImage(out vec4 fragColor, in vec2 fragCoord)` \
+— this is the REQUIRED entry point. The wrapper calls it from main().
 
 ## AUDIO MAPPING — BE CREATIVE AND THOROUGH
 
@@ -528,6 +533,10 @@ but CRASH on NVIDIA. NEVER use them:
 - NEVER use `%` on float values — use `mod(a, b)` instead.
 - NEVER use `#define` for function-like macros with complex \
   expressions — inline them as functions instead.
+- NEVER use texture(), sampler2D(), or any texture/sampler types. \
+  There are NO texture inputs — all visuals must be procedural.
+- You MUST define `void mainImage(out vec4 fragColor, in vec2 fragCoord)` \
+  — this is the entry point called by the wrapper.
 
 ## OUTPUT
 
@@ -762,6 +771,59 @@ def _fix_modulo_on_floats(code: str) -> str:
     return "\n".join(fixed)
 
 
+def _strip_texture_sampler_calls(code: str) -> str:
+    """Remove texture()/sampler2D() calls that the LLM hallucinates.
+
+    No textures or samplers are available in the shader environment, but
+    the LLM sometimes generates ``texture(sampler2D(...), uv)`` patterns.
+    These cause 'cannot construct opaque type sampler2D' errors.
+
+    Strategy: replace entire ``texture(sampler2D(...), uv)`` expressions
+    with ``vec4(0.5)`` so the shader still compiles; also remove any
+    standalone ``sampler2D(...)`` constructions.
+    """
+    # Replace  texture(sampler2D(...), ...) → vec4(0.5)
+    # We need balanced-paren matching for the nested sampler2D call.
+    max_passes = 20
+    for _ in range(max_passes):
+        m = _re.search(r"\btexture\s*\(\s*sampler2D\s*\(", code)
+        if not m:
+            break
+        # Find the outer texture( opening paren
+        outer_start = code.index("(", m.start())
+        outer_end = _find_matching_paren(code, outer_start)
+        if outer_end == -1:
+            break
+        code = code[:m.start()] + "vec4(0.5)" + code[outer_end + 1:]
+
+    # Remove any remaining standalone sampler2D(...) constructions
+    for _ in range(max_passes):
+        m = _re.search(r"\bsampler2D\s*\(", code)
+        if not m:
+            break
+        paren_start = code.index("(", m.start())
+        paren_end = _find_matching_paren(code, paren_start)
+        if paren_end == -1:
+            break
+        # Replace with the inner expression (it's likely a channel/unit number)
+        inner = code[paren_start + 1:paren_end].strip()
+        code = code[:m.start()] + inner + code[paren_end + 1:]
+
+    # Remove any remaining bare texture() calls (no samplers available)
+    # Replace  texture(expr, uv)  →  vec4(0.5)
+    for _ in range(max_passes):
+        m = _re.search(r"\btexture\s*\(", code)
+        if not m:
+            break
+        paren_start = code.index("(", m.start())
+        paren_end = _find_matching_paren(code, paren_start)
+        if paren_end == -1:
+            break
+        code = code[:m.start()] + "vec4(0.5)" + code[paren_end + 1:]
+
+    return code
+
+
 def _fix_missing_semicolons(code: str) -> str:
     """Insert missing semicolons before function declarations.
 
@@ -807,6 +869,7 @@ def sanitize_shader_code(raw: str) -> str:
     - NVIDIA reserved name collisions (``hash`` → ``hashFn``, etc.)
     - Integer literals in vec/mat constructors (NVIDIA compat)
     - Float modulo ``%`` → ``mod()`` (NVIDIA compat)
+    - texture() / sampler2D calls (no textures available)
     - Double braces ``{{`` / ``}}``
     - Missing semicolons before function declarations
     - Stray backslash line continuations
@@ -848,6 +911,10 @@ def sanitize_shader_code(raw: str) -> str:
     # ── Fix float modulo operator ────────────────────────────
     # NVIDIA rejects `%` on floats — must use mod()
     code = _fix_modulo_on_floats(code)
+
+    # ── Strip texture/sampler2D calls (no textures available) ─
+    # LLM hallucinates texture(sampler2D(...), uv) patterns.
+    code = _strip_texture_sampler_calls(code)
 
     # ── Fix double braces {{ → { and }} → } ─────────────────
     code = _RE_DOUBLE_BRACE_OPEN.sub("{", code)
@@ -1226,7 +1293,11 @@ End with 1-2 follow-up questions to refine the concept."""
             "- Name hash functions 'hashFn', noise functions 'noiseFn'\n"
             "- Never use void() as constructor/expression\n"
             "- Never write 'return void;'\n"
-            "- Use mod(a, b) not % for floats\n\n"
+            "- Use mod(a, b) not % for floats\n"
+            "- NEVER use texture(), sampler2D, or any sampler types — "
+            "no textures are available. All visuals must be procedural.\n"
+            "- You MUST define void mainImage(out vec4 fragColor, "
+            "in vec2 fragCoord) — this is the required entry point.\n\n"
             "Output ONLY GLSL code."
         )
         return await self._call_shader_llm(prompt, temperature=0.85)
@@ -1329,6 +1400,25 @@ End with 1-2 follow-up questions to refine the concept."""
                 "vec3 functions return vec3, etc. Use explicit "
                 "constructors like float(...) or vec3(...).\n\n"
             )
+        elif "opaque type" in error_lower or "sampler2d" in error_lower:
+            specific_advice = (
+                "ERROR: You used texture() or sampler2D but NO textures "
+                "or samplers are available in this environment. You MUST "
+                "remove ALL texture(), sampler2D, sampler1D, and any "
+                "texture sampling code. Generate all visuals procedurally "
+                "using math — noise functions, SDFs, fractals, etc.\n\n"
+            )
+        elif "no function with name" in error_lower:
+            fn_match = _re.search(
+                r"no function with name '(\w+)'", compile_error,
+            )
+            fn_name = fn_match.group(1) if fn_match else "mainImage"
+            specific_advice = (
+                f"ERROR: The function '{fn_name}' is missing. "
+                f"You MUST define `void mainImage(out vec4 fragColor, "
+                f"in vec2 fragCoord)` — this is the required entry "
+                f"point. The wrapper calls it from main().\n\n"
+            )
 
         prompt = (
             f"This shader was meant to depict: {description}\n\n"
@@ -1351,7 +1441,11 @@ End with 1-2 follow-up questions to refine the concept."""
             "- Name hash functions 'hashFn', noise 'noiseFn'\n"
             "- Use float literals: 1.0 not 1 in constructors\n"
             "- Use mod(a, b) not % for float operands\n"
-            "- Define functions ABOVE their first use\n\n"
+            "- Define functions ABOVE their first use\n"
+            "- NEVER use texture(), sampler2D, or any sampler types "
+            "— no textures are available\n"
+            "- You MUST define void mainImage(out vec4 fragColor, "
+            "in vec2 fragCoord) as the entry point\n\n"
             "Output ONLY the complete corrected GLSL code. "
             "No markdown fences, no explanation."
         )
@@ -1393,7 +1487,11 @@ End with 1-2 follow-up questions to refine the concept."""
             "- NEVER use void() as expression/constructor\n"
             "- NEVER write 'return void;' — use 'return;'\n"
             "- Use mod(a, b) not % for float modulo\n"
-            "- Define all helper functions ABOVE their first use\n\n"
+            "- Define all helper functions ABOVE their first use\n"
+            "- NEVER use texture(), sampler2D, or any sampler/texture types "
+            "— all visuals must be procedural\n"
+            "- You MUST define void mainImage(out vec4 fragColor, "
+            "in vec2 fragCoord) as the entry point\n\n"
             "Output ONLY GLSL code. No markdown fences. No explanation."
         )
         return await self._call_shader_llm(prompt, temperature=0.7)

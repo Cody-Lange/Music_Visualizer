@@ -565,6 +565,26 @@ class ShaderRenderService:
                             f"{mv.group(1)} constructor — {stripped}"
                         )
 
+        # ── sampler2D / texture() usage (no textures available) ─
+        if _re.search(r"\bsampler2D\b", shader_code):
+            return (
+                "NVIDIA compat: sampler2D is an opaque type and cannot "
+                "be constructed — no textures are available. Use "
+                "procedural generation only."
+            )
+        if _re.search(r"\btexture\s*\(", shader_code):
+            return (
+                "NVIDIA compat: texture() called but no samplers are "
+                "available — generate all visuals procedurally."
+            )
+
+        # ── Missing mainImage entry point ─────────────────────
+        if not _re.search(r"\bvoid\s+mainImage\s*\(", shader_code):
+            return (
+                "Missing required entry point: "
+                "void mainImage(out vec4 fragColor, in vec2 fragCoord)"
+            )
+
         # ── Reserved function names on NVIDIA ────────────────
         if _re.search(
             r"\b(?:float|vec[234]|int)\s+hash\s*\(", shader_code,
