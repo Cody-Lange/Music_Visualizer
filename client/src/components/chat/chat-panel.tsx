@@ -89,6 +89,7 @@ export function ChatPanel() {
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const renderTriggered = useRef(false);
+  const lastRenderedSpec = useRef<unknown>(null);
 
   const messages = useChatStore((s) => s.messages);
   const isStreaming = useChatStore((s) => s.isStreaming);
@@ -139,8 +140,12 @@ export function ChatPanel() {
   useEffect(() => {
     if (phase !== "rendering" || !renderSpec || renderTriggered.current) return;
     if (!jobId) return;
+    // Don't re-render the exact same spec (prevents the server/client
+    // phase-desync loop from triggering duplicate renders).
+    if (lastRenderedSpec.current === renderSpec) return;
 
     renderTriggered.current = true;
+    lastRenderedSpec.current = renderSpec;
 
     resetRender();
     setRenderStatus("rendering");

@@ -316,7 +316,8 @@ The wrapper compiles your code as #version 330, which is STRICT about types.
 6. Array sizes must be compile-time constants
 7. for-loop bounds must be compile-time constants (e.g. for(int i=0;i<64;i++))
 8. No recursive function calls
-9. Return type of mainImage is void — write to fragColor parameter
+9. Return type of mainImage is void — write to fragColor parameter. \
+   Never write `return void;` or `void(...)` — void is NOT a value or constructor.
 10. Keep total loop iterations reasonable (max ~200 combined ray steps + noise octaves)
 11. No #version directive — the wrapper handles it
 12. Use explicit float() or int() casts when mixing types (e.g. float(myInt) * 2.0)
@@ -412,14 +413,17 @@ _RE_VOID_MAIN = _re.compile(
     r"void\s+main\s*\(\s*\)\s*\{[^}]*mainImage\s*\([^)]*\)\s*;[^}]*\}",
     _re.DOTALL,
 )
+# `return void;` or `return void(...)` — void is not a value in GLSL
+_RE_RETURN_VOID = _re.compile(r"\breturn\s+void\b")
 
 
 def sanitize_shader_code(raw: str) -> str:
     """Clean up common LLM mistakes in generated GLSL code.
 
     Strips markdown fences, duplicate uniform/out declarations, #version
-    directives, precision qualifiers, and wrapper ``void main()`` functions
-    that the shader wrapper already provides.
+    directives, precision qualifiers, wrapper ``void main()`` functions
+    that the shader wrapper already provides, and ``return void`` which
+    is not valid GLSL.
     """
     code = raw.strip()
 
@@ -441,6 +445,9 @@ def sanitize_shader_code(raw: str) -> str:
 
     # Strip void main() wrapper that calls mainImage (wrapper provides this)
     code = _RE_VOID_MAIN.sub("", code)
+
+    # Fix `return void;` → `return;` (void is not a value)
+    code = _RE_RETURN_VOID.sub("return", code)
 
     # Collapse excessive blank lines
     code = _re.sub(r"\n{3,}", "\n\n", code)

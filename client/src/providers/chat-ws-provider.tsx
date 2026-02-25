@@ -112,11 +112,16 @@ export function ChatWebSocketProvider({ children }: { children: ReactNode }) {
           if (message.render_spec) {
             useChatStore.getState().setRenderSpec(message.render_spec as any);
 
-            // Auto-generate shader from the render spec's shader description
-            const globalStyle = (message.render_spec as any)?.globalStyle;
-            const shaderDesc = globalStyle?.shaderDescription;
-            if (shaderDesc && typeof shaderDesc === "string") {
-              autoGenerateShader(shaderDesc);
+            // Only auto-generate shader when we're about to render
+            // (not during editing phase where conversation should
+            // clarify edits before the user explicitly re-renders).
+            const currentPhase = useChatStore.getState().phase;
+            if (currentPhase !== "editing") {
+              const globalStyle = (message.render_spec as any)?.globalStyle;
+              const shaderDesc = globalStyle?.shaderDescription;
+              if (shaderDesc && typeof shaderDesc === "string") {
+                autoGenerateShader(shaderDesc);
+              }
             }
           }
           break;

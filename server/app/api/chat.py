@@ -251,6 +251,10 @@ async def chat_websocket(websocket: WebSocket, session_id: str) -> None:
                         "type": "render_spec",
                         "render_spec": render_spec,
                     }))
+
+                    # Transition to editing so subsequent messages don't
+                    # re-broadcast "rendering" phase back to the client.
+                    phase = "editing"
                 else:
                     # Extraction failed — go back to confirmation
                     phase = "confirmation"

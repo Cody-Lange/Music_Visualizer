@@ -323,6 +323,7 @@ class ShaderRenderService:
 
         try:
             fbo.use()
+            ctx.viewport = (0, 0, width, height)
 
             for frame_idx in range(total_frames):
                 t = frame_idx / fps
