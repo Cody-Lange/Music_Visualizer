@@ -618,13 +618,17 @@ class ShaderRenderService:
         return None
 
     @staticmethod
-    def _try_compile(shader_code: str) -> str | None:
+    def _try_compile(shader_code: str) -> tuple[str | None, str]:
         """Try compiling shader_code in a temporary GL context.
 
-        Runs NVIDIA static analysis first (catches patterns Mesa
-        accepts but NVIDIA rejects), then compiles with ModernGL.
-        Returns None on success, or the error message string on
-        failure.
+        Runs the sanitizer first, then NVIDIA static analysis, then
+        compiles with ModernGL.
+
+        Returns ``(error_or_none, sanitized_code)`` — a 2-tuple so the
+        caller always gets back the sanitized version of the code
+        (which may have had mainImage injected, reserved names renamed,
+        etc.).  This prevents the retry pipeline from losing sanitizer
+        fixes.
         """
         # Run the sanitizer one more time as a safety net — the LLM
         # service sanitizes output, but fix_shader and retry paths
@@ -638,7 +642,7 @@ class ShaderRenderService:
             shader_code,
         )
         if nvidia_err:
-            return nvidia_err
+            return nvidia_err, shader_code
 
         import sys
         _kw: dict = {}
@@ -653,9 +657,9 @@ class ShaderRenderService:
                 vertex_shader=_VERTEX_SHADER,
                 fragment_shader=frag_src,
             )
-            return None
+            return None, shader_code
         except Exception as e:
-            return str(e)
+            return str(e), shader_code
         finally:
             ctx.release()
 
@@ -673,7 +677,7 @@ class ShaderRenderService:
         to fix it (up to 3 retries).  Falls back to a curated shader on
         total failure.  The heavy GL + FFmpeg work runs in a thread.
         """
-        compile_err = await asyncio.to_thread(
+        compile_err, shader_code = await asyncio.to_thread(
             self._try_compile, shader_code,
         )
         if compile_err:
@@ -697,7 +701,7 @@ class ShaderRenderService:
                 )
                 if not fixed:
                     break
-                retry_err = await asyncio.to_thread(
+                retry_err, fixed = await asyncio.to_thread(
                     self._try_compile, fixed,
                 )
                 if retry_err is None:

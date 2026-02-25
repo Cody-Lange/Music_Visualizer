@@ -10,10 +10,11 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-def _try_compile(shader_code: str) -> str | None:
+def _try_compile(shader_code: str) -> tuple[str | None, str]:
     """Compile-check *shader_code* inside the fragment wrapper.
 
-    Returns ``None`` on success, or the error message string on failure.
+    Returns ``(error_or_none, sanitized_code)`` — a 2-tuple so the
+    caller always gets back the sanitized version of the code.
     Lazy-imports moderngl so the module still loads if the GPU lib is absent.
     """
     try:
@@ -26,7 +27,8 @@ def _try_compile(shader_code: str) -> str | None:
         logger.debug(
             "Server-side shader compilation unavailable: %s", exc,
         )
-        return None
+        # Can't compile — return the original code unchanged
+        return None, shader_code
 
 
 async def _generate_and_validate(
@@ -43,6 +45,12 @@ async def _generate_and_validate(
       3. If fixes fail, generate a fresh shader from scratch
       4. If that fails too, one more fix attempt
       5. Fallback is absolute last resort
+
+    IMPORTANT: _try_compile() returns (error, sanitized_code).
+    We always use the *sanitized* version going forward because the
+    sanitizer may have injected mainImage, renamed reserved names,
+    fixed int literals, etc.  Without this, the retry pipeline would
+    pass unsanitized code to fix_shader and lose those fixes.
     """
     # ── Attempt 1: full creative generation ───────────────
     code = await llm.generate_shader(
@@ -55,7 +63,7 @@ async def _generate_and_validate(
             status_code=500, detail="Shader generation failed",
         )
 
-    compile_err = await asyncio.to_thread(_try_compile, code)
+    compile_err, code = await asyncio.to_thread(_try_compile, code)
     if compile_err is None:
         logger.info("Shader compiled on first attempt")
         return code
@@ -75,7 +83,7 @@ async def _generate_and_validate(
         if not fixed:
             break
 
-        retry_err = await asyncio.to_thread(_try_compile, fixed)
+        retry_err, fixed = await asyncio.to_thread(_try_compile, fixed)
         if retry_err is None:
             logger.info(
                 "LLM fix compiled on retry %d", retry + 1,
@@ -97,7 +105,7 @@ async def _generate_and_validate(
         mood_tags=mood_tags,
     )
     if fresh:
-        fresh_err = await asyncio.to_thread(_try_compile, fresh)
+        fresh_err, fresh = await asyncio.to_thread(_try_compile, fresh)
         if fresh_err is None:
             logger.info("Fresh shader compiled successfully")
             return fresh
@@ -112,7 +120,7 @@ async def _generate_and_validate(
             description=description,
         )
         if final_fix:
-            final_err = await asyncio.to_thread(
+            final_err, final_fix = await asyncio.to_thread(
                 _try_compile, final_fix,
             )
             if final_err is None:
