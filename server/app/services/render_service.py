@@ -95,13 +95,16 @@ class RenderService:
         template = render_spec.global_style.template
         beats = analysis.get("rhythm", {}).get("beats", [])
 
-        # Count additional inputs (AI keyframe images)
+        # Count additional inputs (AI keyframe images) and map section → input index
         extra_inputs: list[str] = []
         num_keyframe_inputs = 0
+        keyframe_input_map: dict[str, int] = {}  # section_label → FFmpeg input index
         if keyframe_paths:
             for section in render_spec.sections:
                 kf = keyframe_paths.get(section.label, "")
                 if kf and Path(kf).exists():
+                    input_idx = 1 + num_keyframe_inputs  # [0] is color source
+                    keyframe_input_map[section.label] = input_idx
                     extra_inputs.extend(["-loop", "1", "-t", str(duration), "-i", kf])
                     num_keyframe_inputs += 1
 
@@ -118,7 +121,7 @@ class RenderService:
             filter_complex = self._build_full_filter_graph(
                 render_spec, template, duration, width, height, fps,
                 beats if use_beats else [],
-                keyframe_paths or {},
+                keyframe_input_map,
             )
 
             cmd = [
@@ -177,12 +180,12 @@ class RenderService:
         height: int,
         fps: int,
         beats: list[float],
-        keyframe_paths: dict[str, str],
+        keyframe_input_map: dict[str, int],
     ) -> str:
         """Build a comprehensive FFmpeg filter_complex.
 
-        Per-section: unique gradient + procedural overlay + motion + transitions.
-        Then: concatenate sections, add beat-flash layer, composite.
+        Per-section: AI keyframe image (if available) OR gradient + procedural
+        overlay, then motion + transitions.  Concatenate, beat-flash, output.
         """
         filters: list[str] = []
         section_out_labels: list[str] = []
@@ -202,9 +205,9 @@ class RenderService:
             c2 = (colors[2] if len(colors) > 2 else colors[0]).lstrip("#")
             sec_dur = max(section.end_time - section.start_time, 0.1)
             intensity = section.intensity
+            kf_idx = keyframe_input_map.get(section.label)
 
             # ── Layer 1: section-unique gradient background ──
-            # Vary the gradient layout per section using index
             top_h = height // 2 + int(height * 0.1 * math.sin(i * 1.7))
             bot_h = height - top_h
             filters.append(
@@ -214,19 +217,35 @@ class RenderService:
                 f"[{s}_bg]"
             )
 
-            # ── Layer 2: template-specific procedural effect ──
-            proc = self._procedural_effect(template, s, width, height, sec_dur, fps, intensity)
-            if proc:
-                filters.append(proc)
-                blend_strength = 0.25 + intensity * 0.35
+            if kf_idx is not None:
+                # ── AI keyframe: scale to fit, overlay on gradient ──
                 filters.append(
-                    f"[{s}_bg][{s}_fx]blend=all_mode=screen"
-                    f":all_opacity={blend_strength:.2f}[{s}_comp]"
+                    f"[{kf_idx}:v]scale={width}:{height}"
+                    f":force_original_aspect_ratio=decrease,"
+                    f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+                    f"setsar=1,trim=duration={sec_dur},setpts=PTS-STARTPTS,"
+                    f"format=yuva420p[{s}_kf]"
+                )
+                filters.append(
+                    f"[{s}_bg]format=yuva420p[{s}_bgf];"
+                    f"[{s}_bgf][{s}_kf]overlay=0:0:format=auto[{s}_comp]"
                 )
             else:
-                filters.append(f"[{s}_bg]null[{s}_comp]")
+                # ── No keyframe: procedural effect layer ──
+                proc = self._procedural_effect(
+                    template, s, width, height, sec_dur, fps, intensity,
+                )
+                if proc:
+                    filters.append(proc)
+                    blend_strength = 0.25 + intensity * 0.35
+                    filters.append(
+                        f"[{s}_bg][{s}_fx]blend=all_mode=screen"
+                        f":all_opacity={blend_strength:.2f}[{s}_comp]"
+                    )
+                else:
+                    filters.append(f"[{s}_bg]null[{s}_comp]")
 
-            # ── Layer 3: motion (zoompan) ──
+            # ── Motion (zoompan) ──
             motion = _MOTION_PARAMS.get(
                 section.motion_style, _MOTION_PARAMS["slow-drift"]
             )

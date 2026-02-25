@@ -27,6 +27,10 @@ export default defineConfig({
         target: "ws://localhost:8000",
         ws: true,
       },
+      "/storage": {
+        target: "http://localhost:8000",
+        changeOrigin: true,
+      },
     },
   },
 });
