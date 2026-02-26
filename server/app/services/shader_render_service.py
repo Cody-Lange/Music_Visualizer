@@ -830,9 +830,25 @@ class ShaderRenderService:
                     else:
                         compile_err = fix_err
 
+            # Minimal generation — simple 2D shader matching the
+            # description, almost guaranteed to compile.
+            if compile_err:
+                logger.info("Trying minimal shader generation")
+                minimal = await llm.generate_shader_minimal(desc)
+                if minimal:
+                    min_err, minimal = await asyncio.to_thread(
+                        self._try_compile, minimal,
+                    )
+                    if min_err is None:
+                        shader_code = minimal
+                        compile_err = None
+                    else:
+                        logger.warning("Minimal shader failed: %s", min_err)
+
+            # Absolute last resort — only if Gemini is fully down
             if compile_err:
                 logger.warning(
-                    "All LLM fixes failed, using fallback shader",
+                    "All LLM attempts failed, using curated fallback",
                 )
                 shader_code = pick_fallback_shader(desc)
 

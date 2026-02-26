@@ -204,7 +204,28 @@ async def _generate_and_validate(
                     "Final validation still fails: %s", final_err,
                 )
 
-    # ── Step 6: curated fallback ──────────────────────────
+    # ── Step 6: minimal generation ──────────────────────────
+    # Instead of a canned fallback, ask the LLM for a SIMPLE shader
+    # (2D only, no raymarching) that still matches the description.
+    # This is almost guaranteed to compile.
+    logger.info("Trying minimal shader generation for '%s'", description[:60])
+    minimal = await llm.generate_shader_minimal(description=description)
+    if minimal:
+        min_err, minimal = await _compile_or_none(minimal)
+        if min_err is None:
+            logger.info("Minimal shader compiled successfully")
+            return minimal
+        logger.warning("Minimal shader failed: %s", min_err)
+
+        # One fix attempt on the minimal shader
+        min_err, minimal = await _try_fix_entry_point(
+            llm, minimal, min_err, description,
+        )
+        if min_err is None:
+            return minimal
+
+    # ── Step 7: absolute last resort ─────────────────────
+    # Only reached if Gemini is completely down (circuit breaker open).
     logger.warning(
         "All LLM attempts exhausted — using curated fallback for '%s'",
         description[:80],

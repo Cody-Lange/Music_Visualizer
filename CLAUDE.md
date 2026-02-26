@@ -194,7 +194,7 @@ The server-side shader pipeline runs on ModernGL with the host GPU's GLSL compil
 If shaders still fail to compile on NVIDIA, the relevant files are:
 - `server/app/services/llm_service.py` — `SHADER_SYSTEM_PROMPT`, `sanitize_shader_code()`, `ensure_entry_point()`, `validate_shader()`, `fix_shader()`, `_strip_void_expressions()`, `_rename_nvidia_reserved()`, `_fix_int_literals_in_constructors()`, `_fix_modulo_on_floats()`, `_fix_narrow_fov()`
 - `server/app/services/shader_render_service.py` — `_nvidia_static_check()`, `_try_compile()`, `_precompute_audio_features()`
-- `server/app/api/shader.py` — `_generate_and_validate()` pipeline (generate → ensure_entry_point → validate_shader → fix_shader → fresh gen → fallback)
+- `server/app/api/shader.py` — `_generate_and_validate()` pipeline (generate → ensure_entry_point → validate_shader → fix_shader → fresh gen → minimal gen → curated fallback)
 
 ### Shader Architecture
 - **Client wrapper** (WebGL 1.0): `precision highp float;` + uniforms + `void main() { mainImage(gl_FragColor, gl_FragCoord.xy); }` — in `client/src/components/visualizer/scenes/shader-scene.tsx`

@@ -1826,6 +1826,62 @@ End with 1-2 follow-up questions to refine the concept."""
         )
         return await self._call_shader_llm(prompt, temperature=0.7)
 
+    async def generate_shader_minimal(
+        self,
+        description: str,
+    ) -> str | None:
+        """Last-resort shader generation — simple enough to always compile.
+
+        Called when all complex generations and fixes have failed.
+        Instead of a canned fallback that ignores the user's description,
+        this asks the LLM to generate a SIMPLE but description-matching
+        shader using only basic, proven-to-compile patterns.
+
+        The key constraint: NO raymarching, NO complex SDFs, NO deep
+        nesting — just 2D effects that are virtually guaranteed to compile
+        on any GLSL 330 driver.
+        """
+        prompt = (
+            "EMERGENCY: All previous shader generation attempts failed "
+            "to compile. Generate the SIMPLEST possible shader that "
+            "still looks good and matches this description:\n\n"
+            f"  \"{description}\"\n\n"
+            "STRICT RULES — violating ANY of these will cause failure:\n"
+            "1. Use ONLY simple 2D techniques: color gradients, sin/cos "
+            "   patterns, polar coordinates, simple fbm (2-3 octaves max), "
+            "   basic Voronoi, concentric rings, radial patterns\n"
+            "2. NO raymarching, NO SDF functions, NO 3D scenes\n"
+            "3. Keep the shader under 80 lines total\n"
+            "4. Use ONLY these uniforms (already declared by wrapper):\n"
+            "   iTime, iResolution, u_bass, u_mid, u_treble, u_energy, "
+            "   u_beat, u_spectralCentroid\n"
+            "5. ALL float literals must have decimals: 1.0 not 1\n"
+            "6. Name any hash function 'hashFn', noise 'noiseFn'\n"
+            "7. NO texture(), sampler2D, iChannel — all procedural\n"
+            "8. NO void() expressions, NO 'return void;'\n"
+            "9. Use mod(a,b) not % for floats\n"
+            "10. You MUST define:\n"
+            "    void mainImage(out vec4 fragColor, in vec2 fragCoord)\n\n"
+            "Make the colors and motion match the description. Use audio "
+            "uniforms to make it reactive (multiply by 0.1-0.3).\n\n"
+            "Output ONLY the GLSL code. No markdown. No explanation.\n\n"
+            "EXAMPLE of acceptable complexity level:\n"
+            "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n"
+            "    vec2 uv = (fragCoord * 2.0 - iResolution.xy) "
+            "/ min(iResolution.x, iResolution.y);\n"
+            "    float angle = atan(uv.y, uv.x);\n"
+            "    float radius = length(uv);\n"
+            "    float wave = sin(angle * 6.0 + iTime + u_bass * 2.0);\n"
+            "    float ring = sin(radius * 10.0 - iTime * 2.0 "
+            "+ u_energy * 3.0);\n"
+            "    vec3 col = vec3(0.5 + 0.5 * wave, "
+            "0.3 + 0.3 * ring, 0.7 + 0.2 * u_treble);\n"
+            "    col *= 1.0 - 0.4 * radius;\n"
+            "    fragColor = vec4(col, 1.0);\n"
+            "}\n"
+        )
+        return await self._call_shader_llm(prompt, temperature=0.5)
+
     async def ensure_entry_point(
         self,
         code: str,
