@@ -79,7 +79,9 @@ async def _run_render(
     Updates job_store with status/progress so the client can poll.
     """
     try:
-        # Step 1: Generate shader code if we have a description but no code
+        # Step 1: Generate shader code if we have a description but no code.
+        # Uses the full validation pipeline (generate → compile-check →
+        # LLM fix retries → fallback) instead of raw generate_shader().
         if not shader_code and shader_desc:
             job_store.update_job(render_id, {
                 "status": "generating_shader",
@@ -87,11 +89,21 @@ async def _run_render(
                 "message": "Generating shader from description...",
             })
             logger.info("Generating shader for render %s", render_id)
+            from app.api.shader import _generate_and_validate
+
             llm = LLMService()
-            shader_code = await llm.generate_shader(
-                description=shader_desc,
-                mood_tags=mood_tags or None,
-            )
+            try:
+                shader_code = await _generate_and_validate(
+                    llm,
+                    description=shader_desc,
+                    mood_tags=mood_tags or None,
+                    color_palette=None,
+                )
+            except HTTPException:
+                # _generate_and_validate raises 500 if LLM returns nothing.
+                # Fall through with shader_code=None → FFmpeg fallback
+                logger.warning("Shader generation failed for render %s", render_id)
+                shader_code = None
 
         # Step 2: Render the video
         job_store.update_job(render_id, {

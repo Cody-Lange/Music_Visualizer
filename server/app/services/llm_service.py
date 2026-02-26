@@ -740,6 +740,17 @@ def _rename_nvidia_reserved(code: str) -> str:
             rf"\b(?:float|vec[234]|int|void|mat[234])\s+{reserved}\s*\(",
             code,
         ):
+            # Don't rename if the replacement name already exists —
+            # would create a "function redefined" error.
+            if _re.search(
+                rf"\b(?:float|vec[234]|int|void|mat[234])\s+{replacement}\s*\(",
+                code,
+            ):
+                _logger.debug(
+                    "Skipping rename %s→%s: %s already defined",
+                    reserved, replacement, replacement,
+                )
+                continue
             code = _re.sub(rf"\b{reserved}\b", replacement, code)
     return code
 
