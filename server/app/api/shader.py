@@ -31,28 +31,33 @@ def _try_compile(shader_code: str) -> tuple[str | None, str]:
         return None, shader_code
 
 
+async def _compile_or_none(code: str) -> tuple[str | None, str]:
+    """Compile-check in a thread.  Returns (error, sanitized_code)."""
+    return await asyncio.to_thread(_try_compile, code)
+
+
 async def _generate_and_validate(
     llm: LLMService,
     description: str,
     mood_tags: list[str] | None,
     color_palette: list[str] | None,
 ) -> str:
-    """Generate a shader via the LLM with progressive compile-retry.
+    """Generate a shader via the LLM and validate with compile checks.
 
-    Strategy (up to 6 LLM calls before fallback):
-      1. Generate a complex shader (full creative freedom)
-      2. If it fails, ask the LLM to FIX the exact error (x3)
-      3. If fixes fail, generate a fresh shader from scratch
-      4. If that fails too, one more fix attempt
-      5. Fallback is absolute last resort
+    Pipeline — uses the LLM for *all* semantic fixes (not regex):
+      1. Generate a complex shader
+      2. Compile-check
+      3. If missing mainImage → LLM ensure_entry_point()  (semantic)
+      4. If other error → LLM validate_shader()           (full-code review)
+      5. Still failing → LLM fix_shader() retries          (targeted fix)
+      6. Still failing → fresh generation from scratch
+      7. Curated fallback as absolute last resort
 
-    IMPORTANT: _try_compile() returns (error, sanitized_code).
-    We always use the *sanitized* version going forward because the
-    sanitizer may have injected mainImage, renamed reserved names,
-    fixed int literals, etc.  Without this, the retry pipeline would
-    pass unsanitized code to fix_shader and lose those fixes.
+    _try_compile() returns (error, sanitized_code) — the mechanical
+    sanitizer (strip markdown, rename hash→hashFn, fix int literals,
+    etc.) runs inside every _try_compile() call automatically.
     """
-    # ── Attempt 1: full creative generation ───────────────
+    # ── Step 1: full creative generation ───────────────────
     code = await llm.generate_shader(
         description=description,
         mood_tags=mood_tags,
@@ -63,26 +68,54 @@ async def _generate_and_validate(
             status_code=500, detail="Shader generation failed",
         )
 
-    compile_err, code = await asyncio.to_thread(_try_compile, code)
+    compile_err, code = await _compile_or_none(code)
     if compile_err is None:
         logger.info("Shader compiled on first attempt")
         return code
 
-    logger.warning(
-        "Initial shader failed compile check: %s", compile_err,
-    )
+    logger.warning("Initial compile failed: %s", compile_err)
 
-    # ── Structural error fast-path ────────────────────────
-    # "Missing required entry point" means the sanitizer's 7 tiers
-    # all failed to find/create mainImage.  Asking the LLM to "fix"
-    # this rarely works — it regenerates the same pattern.  Skip
-    # straight to a fresh generation instead of burning 3 fix calls.
-    _is_structural = "missing required entry point" in compile_err.lower()
+    # ── Step 2: LLM-based structural fix ───────────────────
+    # If mainImage is missing, regex can't reliably fix arbitrary
+    # code structures — the LLM understands the code semantically.
+    if "missing required entry point" in compile_err.lower():
+        logger.info("Missing mainImage — asking LLM to fix structure")
+        fixed = await llm.ensure_entry_point(code, description)
+        compile_err, fixed = await _compile_or_none(fixed)
+        if compile_err is None:
+            logger.info("LLM ensure_entry_point fixed the shader")
+            return fixed
+        logger.warning("After ensure_entry_point: %s", compile_err)
+        code = fixed  # use the (possibly improved) version going forward
 
-    # ── Attempts 2-4: targeted fix of the broken shader ───
-    if not _is_structural:
+    # ── Step 3: LLM full-code review ──────────────────────
+    # The LLM reads the entire shader + error, identifies ALL issues
+    # (not just the first compiler error), and fixes them in one pass.
+    if compile_err:
+        logger.info("Asking LLM to review and fix all issues")
+        reviewed = await llm.validate_shader(
+            code=code,
+            compile_error=compile_err,
+            description=description,
+        )
+        if reviewed:
+            from app.services.llm_service import sanitize_shader_code
+
+            reviewed = sanitize_shader_code(reviewed)
+            review_err, reviewed = await _compile_or_none(reviewed)
+            if review_err is None:
+                logger.info("LLM validate_shader fixed the shader")
+                return reviewed
+            logger.warning("After validate_shader: %s", review_err)
+            code = reviewed
+            compile_err = review_err
+
+    # ── Step 4: targeted fix retries ──────────────────────
+    # If the LLM review didn't fully solve it, try focused fixes
+    # on the remaining error (up to 2 more attempts).
+    if compile_err:
         broken_code = code
-        for retry in range(3):
+        for retry in range(2):
             fixed = await llm.fix_shader(
                 previous_code=broken_code,
                 compile_error=compile_err,
@@ -90,66 +123,48 @@ async def _generate_and_validate(
             )
             if not fixed:
                 break
-
-            retry_err, fixed = await asyncio.to_thread(_try_compile, fixed)
+            retry_err, fixed = await _compile_or_none(fixed)
             if retry_err is None:
-                logger.info(
-                    "LLM fix compiled on retry %d", retry + 1,
-                )
+                logger.info("fix_shader succeeded on retry %d", retry + 1)
                 return fixed
-
             logger.warning(
-                "Fix retry %d still fails: %s", retry + 1, retry_err,
+                "fix_shader retry %d: %s", retry + 1, retry_err,
             )
             broken_code = fixed
             compile_err = retry_err
-    else:
-        logger.info(
-            "Structural error (missing mainImage) — skipping fix retries, "
-            "going straight to fresh generation",
-        )
 
-    # ── Fresh generation (still ambitious) ─────────────────
-    logger.info(
-        "Generating fresh shader",
-    )
+    # ── Step 5: fresh generation from scratch ─────────────
+    logger.info("All fixes exhausted — generating fresh shader")
     fresh = await llm.generate_shader_simple(
         description=description,
         mood_tags=mood_tags,
     )
     if fresh:
-        fresh_err, fresh = await asyncio.to_thread(_try_compile, fresh)
+        fresh_err, fresh = await _compile_or_none(fresh)
         if fresh_err is None:
             logger.info("Fresh shader compiled successfully")
             return fresh
-        logger.warning(
-            "Fresh shader also failed: %s", fresh_err,
-        )
+        logger.warning("Fresh shader failed: %s", fresh_err)
 
-        # ── Attempt 6: one final fix of the fresh shader ─
-        final_fix = await llm.fix_shader(
-            previous_code=fresh,
+        # One final LLM review of the fresh attempt
+        final = await llm.validate_shader(
+            code=fresh,
             compile_error=fresh_err,
             description=description,
         )
-        if final_fix:
-            final_err, final_fix = await asyncio.to_thread(
-                _try_compile, final_fix,
-            )
-            if final_err is None:
-                logger.info("Final fix compiled successfully")
-                return final_fix
-            logger.warning(
-                "Final fix still fails: %s", final_err,
-            )
+        if final:
+            from app.services.llm_service import sanitize_shader_code
 
-    # All LLM attempts exhausted — use a curated fallback shader
-    # that is visually complex (raymarching, fractals, etc.) rather
-    # than returning broken code that either won't compile or would
-    # produce a simple gradient.
+            final = sanitize_shader_code(final)
+            final_err, final = await _compile_or_none(final)
+            if final_err is None:
+                logger.info("Final validate_shader fixed fresh shader")
+                return final
+            logger.warning("Final validation still fails: %s", final_err)
+
+    # ── Step 6: curated fallback ──────────────────────────
     logger.warning(
-        "All shader generation attempts exhausted (6 LLM calls) — "
-        "using curated fallback shader for '%s'",
+        "All LLM attempts exhausted — using curated fallback for '%s'",
         description[:80],
     )
     from app.services.shader_render_service import pick_fallback_shader

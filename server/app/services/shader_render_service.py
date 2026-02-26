@@ -721,10 +721,9 @@ class ShaderRenderService:
         )
         if compile_err:
             logger.warning(
-                "Shader failed to compile, requesting LLM fix: %s",
-                compile_err,
+                "Shader failed to compile: %s", compile_err,
             )
-            from app.services.llm_service import LLMService
+            from app.services.llm_service import LLMService, sanitize_shader_code
 
             llm = LLMService()
             desc = (
@@ -732,49 +731,67 @@ class ShaderRenderService:
                 or "audio-reactive visualization"
             )
 
-            # Structural errors (missing mainImage) can't be LLM-fixed
-            # reliably — skip straight to fallback instead of burning
-            # 3 retry calls that reproduce the same problem.
-            is_structural = (
-                "missing required entry point" in compile_err.lower()
-            )
+            # ── LLM-based fix pipeline ────────────────────
+            # Use the LLM for ALL semantic fixes rather than
+            # fragile regex heuristics.
 
-            if not is_structural:
-                broken_code = shader_code
-                for retry in range(3):
-                    fixed = await llm.fix_shader(
-                        previous_code=broken_code,
-                        compile_error=compile_err,
-                        description=desc,
+            # Missing mainImage → LLM ensure_entry_point
+            if "missing required entry point" in compile_err.lower():
+                logger.info("Missing mainImage — LLM ensure_entry_point")
+                fixed = await llm.ensure_entry_point(shader_code, desc)
+                compile_err_new, fixed = await asyncio.to_thread(
+                    self._try_compile, fixed,
+                )
+                if compile_err_new is None:
+                    logger.info("ensure_entry_point fixed shader")
+                    shader_code = fixed
+                    compile_err = None
+                else:
+                    shader_code = fixed
+                    compile_err = compile_err_new
+
+            # General errors → LLM validate_shader (full review)
+            if compile_err:
+                logger.info("LLM validate_shader for: %s", compile_err)
+                reviewed = await llm.validate_shader(
+                    code=shader_code,
+                    compile_error=compile_err,
+                    description=desc,
+                )
+                if reviewed:
+                    reviewed = sanitize_shader_code(reviewed)
+                    rev_err, reviewed = await asyncio.to_thread(
+                        self._try_compile, reviewed,
                     )
-                    if not fixed:
-                        break
-                    retry_err, fixed = await asyncio.to_thread(
+                    if rev_err is None:
+                        logger.info("validate_shader fixed shader")
+                        shader_code = reviewed
+                        compile_err = None
+                    else:
+                        shader_code = reviewed
+                        compile_err = rev_err
+
+            # Still failing → one targeted fix_shader attempt
+            if compile_err:
+                fixed = await llm.fix_shader(
+                    previous_code=shader_code,
+                    compile_error=compile_err,
+                    description=desc,
+                )
+                if fixed:
+                    fix_err, fixed = await asyncio.to_thread(
                         self._try_compile, fixed,
                     )
-                    if retry_err is None:
-                        logger.info(
-                            "LLM-fixed shader compiled on retry %d",
-                            retry + 1,
-                        )
+                    if fix_err is None:
+                        logger.info("fix_shader fixed shader")
                         shader_code = fixed
                         compile_err = None
-                        break
-                    logger.warning(
-                        "LLM retry %d still fails: %s",
-                        retry + 1, retry_err,
-                    )
-                    broken_code = fixed
-                    compile_err = retry_err
-            else:
-                logger.info(
-                    "Structural error (missing mainImage) — "
-                    "skipping fix retries, using curated fallback",
-                )
+                    else:
+                        compile_err = fix_err
 
             if compile_err:
                 logger.warning(
-                    "All retries failed, using fallback shader",
+                    "All LLM fixes failed, using fallback shader",
                 )
                 shader_code = pick_fallback_shader(desc)
 
