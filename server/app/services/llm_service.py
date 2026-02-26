@@ -1020,53 +1020,166 @@ def sanitize_shader_code(raw: str) -> str:
             count=1,
         )
 
-    # ── Last resort: synthesize mainImage if completely missing ──
-    # When the LLM outputs code with no entry point at all, look
-    # for patterns that indicate rendering code (fragColor assignment,
-    # gl_FragColor, etc.) and wrap appropriately.
+    # ── Tier 4+: multi-strategy mainImage recovery ──────────
+    # When the LLM outputs code with no entry point at all, try
+    # progressively broader heuristics to create/rename one.
+    # Each sub-tier is guarded by a fresh check for mainImage so
+    # earlier tiers that succeed skip the rest.
+
+    # 4a: void func(out? vec4, in? vec2) — original tier 4
     if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
-        # Check if there's a function that writes fragColor or gl_FragColor
-        # (a rendering function with the wrong name)
         m_render_fn = _re.search(
             r"\bvoid\s+(\w+)\s*\(\s*(?:out\s+)?vec4\s+\w+\s*,"
             r"\s*(?:in\s+)?vec2\s+\w+\s*\)",
             code,
         )
         if m_render_fn:
-            # Rename this function to mainImage with correct signature
             old_name = m_render_fn.group(1)
-            _logger.debug(
-                "Renaming '%s' to mainImage as entry point", old_name,
-            )
+            _logger.debug("Tier 4a: renaming '%s' to mainImage", old_name)
             code = _re.sub(
                 r"\bvoid\s+" + _re.escape(old_name) + r"\s*\([^)]*\)",
                 "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
                 code,
                 count=1,
             )
-            # Also rename all calls to this function
             code = _re.sub(
                 r"\b" + _re.escape(old_name) + r"\s*\(",
                 "mainImage(",
                 code,
             )
-        elif _re.search(r"\bfragColor\b|\bgl_FragColor\b", code):
-            # Code has fragColor writes but no function wrapping them.
-            # Find the split point: keep top-level functions above,
-            # wrap remaining statements in mainImage.
+
+    # 4b: void func(in? vec2, out? vec4) — reversed parameter order
+    if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        m_rev = _re.search(
+            r"\bvoid\s+(\w+)\s*\(\s*(?:in\s+)?vec2\s+\w+\s*,"
+            r"\s*(?:out\s+)?vec4\s+\w+\s*\)",
+            code,
+        )
+        if m_rev:
+            old_name = m_rev.group(1)
+            _logger.debug("Tier 4b: renaming '%s' (reversed params) to mainImage", old_name)
+            code = _re.sub(
+                r"\bvoid\s+" + _re.escape(old_name) + r"\s*\([^)]*\)",
+                "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
+                code,
+                count=1,
+            )
+            code = _re.sub(
+                r"\b" + _re.escape(old_name) + r"\s*\(",
+                "mainImage(",
+                code,
+            )
+
+    # 4c: vec3/vec4 colorFunc(vec2 uv) — color-returning entry point
+    # LLMs often write `vec3 render(vec2 uv) { return col; }` instead
+    # of using an `out vec4` parameter.
+    if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        m_color_fn = _re.search(
+            r"\b(vec[34])\s+(\w+)\s*\(\s*(?:in\s+)?vec2\s+(\w+)\s*\)",
+            code,
+        )
+        if m_color_fn:
+            ret_type = m_color_fn.group(1)
+            fn_name = m_color_fn.group(2)
+            param_name = m_color_fn.group(3)
             _logger.debug(
-                "No entry point found but fragColor writes detected "
+                "Tier 4c: wrapping %s %s(vec2) with mainImage",
+                ret_type, fn_name,
+            )
+            if ret_type == "vec3":
+                call = f"fragColor = vec4({fn_name}(fragCoord), 1.0);"
+            else:
+                call = f"fragColor = {fn_name}(fragCoord);"
+            code += (
+                f"\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {{\n"
+                f"    {call}\n"
+                f"}}\n"
+            )
+
+    # 4d: void func(vec2 uv) — single vec2 param (missing vec4 out)
+    # Common when the LLM writes `void render(vec2 uv) { fragColor = ...; }`
+    if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        m_void_vec2 = _re.search(
+            r"\bvoid\s+(\w+)\s*\(\s*(?:in\s+)?vec2\s+\w+\s*\)",
+            code,
+        )
+        if m_void_vec2:
+            old_name = m_void_vec2.group(1)
+            _logger.debug("Tier 4d: renaming void %s(vec2) to mainImage", old_name)
+            code = _re.sub(
+                r"\bvoid\s+" + _re.escape(old_name) + r"\s*\([^)]*\)",
+                "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
+                code,
+                count=1,
+            )
+            code = _re.sub(
+                r"\b" + _re.escape(old_name) + r"\s*\(",
+                "mainImage(",
+                code,
+            )
+            code = _re.sub(r"\bgl_FragColor\b", "fragColor", code)
+
+    # 4e: common entry-point names with ANY signature
+    # LLMs use names like render, effect, image, fragment, scene, etc.
+    _ENTRY_NAMES = {
+        "render", "effect", "image", "pixel", "fragment", "shade",
+        "draw", "scene", "display", "run", "getColor", "mainFunc",
+        "mainRender", "main_image", "entry",
+    }
+    if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        for name in _ENTRY_NAMES:
+            m_named = _re.search(
+                r"\b(?:void|vec[34])\s+" + _re.escape(name) + r"\s*\(([^)]*)\)",
+                code,
+            )
+            if m_named:
+                params = m_named.group(1)
+                ret_match = _re.search(
+                    r"\b(void|vec[34])\s+" + _re.escape(name), code,
+                )
+                ret_type = ret_match.group(1) if ret_match else "void"
+                _logger.debug("Tier 4e: detected '%s' as entry point (returns %s)", name, ret_type)
+                if ret_type in ("vec3", "vec4"):
+                    # Color-returning: append a mainImage that calls it
+                    # Pass fragCoord as the vec2 argument
+                    if ret_type == "vec3":
+                        call = f"fragColor = vec4({name}(fragCoord), 1.0);"
+                    else:
+                        call = f"fragColor = {name}(fragCoord);"
+                    code += (
+                        f"\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {{\n"
+                        f"    {call}\n"
+                        f"}}\n"
+                    )
+                else:
+                    # void: rename to mainImage
+                    code = _re.sub(
+                        r"\bvoid\s+" + _re.escape(name) + r"\s*\([^)]*\)",
+                        "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
+                        code,
+                        count=1,
+                    )
+                    code = _re.sub(
+                        r"\b" + _re.escape(name) + r"\s*\(",
+                        "mainImage(",
+                        code,
+                    )
+                    code = _re.sub(r"\bgl_FragColor\b", "fragColor", code)
+                break
+
+    # 4f: bare fragColor / gl_FragColor writes (no wrapping function)
+    if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        if _re.search(r"\bfragColor\b|\bgl_FragColor\b", code):
+            _logger.debug(
+                "Tier 4f: no entry point but fragColor writes detected "
                 "— synthesizing mainImage wrapper",
             )
-            # Simple heuristic: find the last closing brace of a
-            # function definition, everything after it is "main" code
             lines = code.split("\n")
             last_func_end = -1
             brace_depth = 0
             in_func = False
             for i, line in enumerate(lines):
                 stripped = line.strip()
-                # Detect function definition start
                 if _re.match(
                     r"^(?:float|vec[234]|mat[234]|int|void|bool)"
                     r"\s+\w+\s*\(",
@@ -1081,7 +1194,6 @@ def sanitize_shader_code(raw: str) -> str:
                         brace_depth = 0
 
             if last_func_end >= 0:
-                # Split: functions stay above, remaining code goes into mainImage
                 pre = "\n".join(lines[:last_func_end + 1])
                 post = "\n".join(lines[last_func_end + 1:])
                 if post.strip():
@@ -1093,7 +1205,6 @@ def sanitize_shader_code(raw: str) -> str:
                         "}\n"
                     )
             else:
-                # No function definitions at all — wrap everything
                 code = (
                     "void mainImage(out vec4 fragColor, in vec2 fragCoord) {\n"
                     "    vec2 uv = (fragCoord * 2.0 - iResolution.xy) / min(iResolution.x, iResolution.y);\n"
@@ -1101,6 +1212,61 @@ def sanitize_shader_code(raw: str) -> str:
                     "}\n"
                 )
             code = _re.sub(r"\bgl_FragColor\b", "fragColor", code)
+
+    # 4g: last-resort heuristic — find the LAST defined function that
+    # isn't a known SDF/math helper and rename it to mainImage.
+    # LLMs conventionally put the "main" function last.
+    if not _re.search(r"\bvoid\s+mainImage\s*\(", code):
+        _HELPER_PREFIXES = {
+            "sdf", "map", "dist", "sdBox", "sdSphere", "sdTorus",
+            "rot", "rotate", "translate", "hash", "hashFn", "noise",
+            "noiseFn", "fbm", "random", "rand", "clamp", "lerp",
+            "smoothstep", "remap", "palette", "getLight", "getNormal",
+            "calcNormal", "softshadow", "ao", "ambientOcclusion",
+        }
+        all_fns = list(_re.finditer(
+            r"\b(void|float|vec[234]|mat[234]|int|bool)\s+(\w+)\s*\(([^)]*)\)",
+            code,
+        ))
+        # Walk backwards to find the last non-helper function
+        for m_fn in reversed(all_fns):
+            fn_ret = m_fn.group(1)
+            fn_name = m_fn.group(2)
+            fn_params = m_fn.group(3)
+            if fn_name in _HELPER_PREFIXES or fn_name == "mainImage":
+                continue
+            # Skip functions that look like pure SDF helpers (return float, take vec3)
+            if fn_ret == "float" and "vec3" in fn_params and "vec2" not in fn_params:
+                continue
+            _logger.debug(
+                "Tier 4g: last-resort renaming '%s' (%s) to mainImage",
+                fn_name, fn_ret,
+            )
+            if fn_ret in ("vec3", "vec4"):
+                # Color-returning: wrap with mainImage
+                if fn_ret == "vec3":
+                    call = f"fragColor = vec4({fn_name}(fragCoord), 1.0);"
+                else:
+                    call = f"fragColor = {fn_name}(fragCoord);"
+                code += (
+                    f"\nvoid mainImage(out vec4 fragColor, in vec2 fragCoord) {{\n"
+                    f"    {call}\n"
+                    f"}}\n"
+                )
+            else:
+                code = _re.sub(
+                    r"\bvoid\s+" + _re.escape(fn_name) + r"\s*\([^)]*\)",
+                    "void mainImage(out vec4 fragColor, in vec2 fragCoord)",
+                    code,
+                    count=1,
+                )
+                code = _re.sub(
+                    r"\b" + _re.escape(fn_name) + r"\s*\(",
+                    "mainImage(",
+                    code,
+                )
+                code = _re.sub(r"\bgl_FragColor\b", "fragColor", code)
+            break
 
     # ── Fix ALL void-as-expression patterns ──────────────────
     # This is the big one: NVIDIA rejects void(expr), void(),

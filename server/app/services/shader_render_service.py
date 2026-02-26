@@ -731,32 +731,46 @@ class ShaderRenderService:
                 render_spec.global_style.shader_description
                 or "audio-reactive visualization"
             )
-            broken_code = shader_code
-            for retry in range(3):
-                fixed = await llm.fix_shader(
-                    previous_code=broken_code,
-                    compile_error=compile_err,
-                    description=desc,
-                )
-                if not fixed:
-                    break
-                retry_err, fixed = await asyncio.to_thread(
-                    self._try_compile, fixed,
-                )
-                if retry_err is None:
-                    logger.info(
-                        "LLM-fixed shader compiled on retry %d",
-                        retry + 1,
+
+            # Structural errors (missing mainImage) can't be LLM-fixed
+            # reliably — skip straight to fallback instead of burning
+            # 3 retry calls that reproduce the same problem.
+            is_structural = (
+                "missing required entry point" in compile_err.lower()
+            )
+
+            if not is_structural:
+                broken_code = shader_code
+                for retry in range(3):
+                    fixed = await llm.fix_shader(
+                        previous_code=broken_code,
+                        compile_error=compile_err,
+                        description=desc,
                     )
-                    shader_code = fixed
-                    compile_err = None
-                    break
-                logger.warning(
-                    "LLM retry %d still fails: %s",
-                    retry + 1, retry_err,
+                    if not fixed:
+                        break
+                    retry_err, fixed = await asyncio.to_thread(
+                        self._try_compile, fixed,
+                    )
+                    if retry_err is None:
+                        logger.info(
+                            "LLM-fixed shader compiled on retry %d",
+                            retry + 1,
+                        )
+                        shader_code = fixed
+                        compile_err = None
+                        break
+                    logger.warning(
+                        "LLM retry %d still fails: %s",
+                        retry + 1, retry_err,
+                    )
+                    broken_code = fixed
+                    compile_err = retry_err
+            else:
+                logger.info(
+                    "Structural error (missing mainImage) — "
+                    "skipping fix retries, using curated fallback",
                 )
-                broken_code = fixed
-                compile_err = retry_err
 
             if compile_err:
                 logger.warning(

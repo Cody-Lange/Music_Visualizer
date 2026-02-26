@@ -72,33 +72,46 @@ async def _generate_and_validate(
         "Initial shader failed compile check: %s", compile_err,
     )
 
+    # ── Structural error fast-path ────────────────────────
+    # "Missing required entry point" means the sanitizer's 7 tiers
+    # all failed to find/create mainImage.  Asking the LLM to "fix"
+    # this rarely works — it regenerates the same pattern.  Skip
+    # straight to a fresh generation instead of burning 3 fix calls.
+    _is_structural = "missing required entry point" in compile_err.lower()
+
     # ── Attempts 2-4: targeted fix of the broken shader ───
-    broken_code = code
-    for retry in range(3):
-        fixed = await llm.fix_shader(
-            previous_code=broken_code,
-            compile_error=compile_err,
-            description=description,
-        )
-        if not fixed:
-            break
-
-        retry_err, fixed = await asyncio.to_thread(_try_compile, fixed)
-        if retry_err is None:
-            logger.info(
-                "LLM fix compiled on retry %d", retry + 1,
+    if not _is_structural:
+        broken_code = code
+        for retry in range(3):
+            fixed = await llm.fix_shader(
+                previous_code=broken_code,
+                compile_error=compile_err,
+                description=description,
             )
-            return fixed
+            if not fixed:
+                break
 
-        logger.warning(
-            "Fix retry %d still fails: %s", retry + 1, retry_err,
+            retry_err, fixed = await asyncio.to_thread(_try_compile, fixed)
+            if retry_err is None:
+                logger.info(
+                    "LLM fix compiled on retry %d", retry + 1,
+                )
+                return fixed
+
+            logger.warning(
+                "Fix retry %d still fails: %s", retry + 1, retry_err,
+            )
+            broken_code = fixed
+            compile_err = retry_err
+    else:
+        logger.info(
+            "Structural error (missing mainImage) — skipping fix retries, "
+            "going straight to fresh generation",
         )
-        broken_code = fixed
-        compile_err = retry_err
 
-    # ── Attempt 5: fresh generation (still ambitious) ─────
+    # ── Fresh generation (still ambitious) ─────────────────
     logger.info(
-        "Fix retries exhausted, generating fresh shader",
+        "Generating fresh shader",
     )
     fresh = await llm.generate_shader_simple(
         description=description,
