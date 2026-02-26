@@ -239,16 +239,20 @@ export function ChatPanel() {
   // When phase transitions to "rendering" and we have a render spec,
   // submit the render job and start polling for progress.
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollFailures = useRef(0);
 
   useEffect(() => {
-    if (phase !== "rendering" || !renderSpec || renderTriggered.current) return;
+    if (phase !== "rendering" || !renderSpec) return;
     if (!jobId) return;
     // Don't re-render the exact same spec (prevents the server/client
     // phase-desync loop from triggering duplicate renders).
-    if (lastRenderedSpec.current === renderSpec) return;
+    // Use JSON comparison — object identity (===) fails on re-renders.
+    const specKey = JSON.stringify(renderSpec);
+    if (lastRenderedSpec.current === specKey) return;
 
     renderTriggered.current = true;
-    lastRenderedSpec.current = renderSpec;
+    lastRenderedSpec.current = specKey;
+    pollFailures.current = 0;
 
     resetRender();
     setRenderStatus("rendering");
@@ -287,7 +291,19 @@ export function ChatPanel() {
         pollRef.current = setInterval(async () => {
           try {
             const res = await fetch(`/api/render/${rid}/status`);
-            if (!res.ok) return;
+            if (!res.ok) {
+              pollFailures.current++;
+              if (pollFailures.current >= 20) {
+                // 30s of consecutive failures — give up
+                clearInterval(pollRef.current!);
+                pollRef.current = null;
+                renderTriggered.current = false;
+                setRenderError("Lost connection to render server");
+                setPhase("confirmation");
+              }
+              return;
+            }
+            pollFailures.current = 0;
             const status = await res.json();
 
             // Update render store with progress
@@ -334,6 +350,14 @@ export function ChatPanel() {
             }
           } catch (e) {
             console.warn("Render poll error:", e);
+            pollFailures.current++;
+            if (pollFailures.current >= 20) {
+              clearInterval(pollRef.current!);
+              pollRef.current = null;
+              renderTriggered.current = false;
+              setRenderError("Lost connection to render server");
+              setPhase("confirmation");
+            }
           }
         }, 1500);
       })
@@ -350,12 +374,14 @@ export function ChatPanel() {
         });
       });
 
-    // Cleanup: stop polling when unmounting or phase changes
+    // Cleanup: stop polling when unmounting or phase changes.
+    // Also reset renderTriggered so re-renders aren't blocked.
     return () => {
       if (pollRef.current) {
         clearInterval(pollRef.current);
         pollRef.current = null;
       }
+      renderTriggered.current = false;
     };
   }, [phase, renderSpec, jobId, setView, setPhase, addMessage, resetRender, setRenderStatus, setRenderProgress, setRenderId, setDownloadUrl, setRenderError]);
 

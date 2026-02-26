@@ -1152,6 +1152,15 @@ def sanitize_shader_code(raw: str) -> str:
 class LLMService:
     """Gemini Flash integration for thematic analysis and conversational refinement."""
 
+    # Class-level counter: consecutive empty Gemini responses across
+    # ALL shader LLM calls.  When Gemini is flaky (rate-limited,
+    # overloaded, or returning empty), there's no point burning 20+
+    # calls across ensure_entry_point/validate_shader/fix_shader.
+    # After _EMPTY_THRESHOLD consecutive empties, _call_shader_llm
+    # returns None immediately until a successful call resets it.
+    _consecutive_empties: int = 0
+    _EMPTY_THRESHOLD: int = 4
+
     def __init__(self) -> None:
         self._client: genai.Client | None = None
 
@@ -1413,6 +1422,16 @@ End with 1-2 follow-up questions to refine the concept."""
         Handles rate-limit retries internally. Returns sanitized GLSL or
         ``None`` on total failure.
         """
+        # Circuit breaker: if Gemini has returned N consecutive empties,
+        # don't waste more calls — return None immediately.
+        if LLMService._consecutive_empties >= LLMService._EMPTY_THRESHOLD:
+            logger.warning(
+                "Gemini circuit breaker open (%d consecutive empties) "
+                "— skipping LLM call",
+                LLMService._consecutive_empties,
+            )
+            return None
+
         client = self._get_client()
         config = types.GenerateContentConfig(
             system_instruction=SHADER_SYSTEM_PROMPT,
@@ -1430,10 +1449,12 @@ End with 1-2 follow-up questions to refine the concept."""
                 )
                 raw = (response.text or "").strip()
                 if not raw:
+                    LLMService._consecutive_empties += 1
                     logger.warning(
                         "Gemini returned empty response for shader gen "
-                        "(attempt %d/%d)",
+                        "(attempt %d/%d, %d consecutive empties)",
                         attempt + 1, max_retries + 1,
+                        LLMService._consecutive_empties,
                     )
                     if attempt < max_retries:
                         await asyncio.sleep(2.0)
@@ -1450,6 +1471,9 @@ End with 1-2 follow-up questions to refine the concept."""
                         "(first 120 chars): %.120s",
                         raw,
                     )
+
+                # Success — reset the circuit breaker
+                LLMService._consecutive_empties = 0
 
                 sanitized = sanitize_shader_code(raw)
                 # Log first 40 lines at INFO so compilation failures
