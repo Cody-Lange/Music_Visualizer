@@ -226,8 +226,10 @@ Available uniforms (do not redeclare):
   iTime, iResolution, u_bass, u_lowMid, u_mid, u_highMid,
   u_treble, u_energy, u_beat, u_spectralCentroid
 All audio uniforms are in [0,1]. NO textures or samplers are available.
-NEVER use texture(), sampler2D, sampler1D, or any texture sampling — \
-there are NO texture inputs. Generate all visuals procedurally.
+NEVER use texture(), textureLod(), texelFetch(), textureGrad(), \
+sampler2D, sampler1D, iChannel0, iChannel1, iChannel2, iChannel3, \
+or ANY texture/sampler types — there are NO texture inputs. \
+Generate all visuals procedurally.
 
 You MUST define `void mainImage(out vec4 fragColor, in vec2 fragCoord)` \
 — this is the REQUIRED entry point. The wrapper calls it from main().
@@ -568,7 +570,8 @@ but CRASH on NVIDIA. NEVER use them:
 - NEVER use `%` on float values — use `mod(a, b)` instead.
 - NEVER use `#define` for function-like macros with complex \
   expressions — inline them as functions instead.
-- NEVER use texture(), sampler2D(), or any texture/sampler types. \
+- NEVER use texture(), textureLod(), texelFetch(), textureGrad(), \
+  sampler2D, iChannel0-3, or ANY texture/sampler types. \
   There are NO texture inputs — all visuals must be procedural.
 - You MUST define `void mainImage(out vec4 fragColor, in vec2 fragCoord)` \
   — this is the entry point called by the wrapper.
@@ -807,54 +810,73 @@ def _fix_modulo_on_floats(code: str) -> str:
 
 
 def _strip_texture_sampler_calls(code: str) -> str:
-    """Remove texture()/sampler2D() calls that the LLM hallucinates.
+    """Remove ALL texture/sampler patterns the LLM hallucinates.
 
-    No textures or samplers are available in the shader environment, but
-    the LLM sometimes generates ``texture(sampler2D(...), uv)`` patterns.
-    These cause 'cannot construct opaque type sampler2D' errors.
+    No textures or samplers are available in the shader environment.
+    The LLM commonly hallucinates Shadertoy-style patterns:
+      - iChannel0..iChannel3 (Shadertoy texture inputs)
+      - texture(), textureLod(), textureGrad(), texelFetch()
+      - sampler2D, sampler1D, sampler3D, samplerCube, etc.
+      - uniform sampler* declarations
 
-    Strategy: replace entire ``texture(sampler2D(...), uv)`` expressions
-    with ``vec4(0.5)`` so the shader still compiles; also remove any
-    standalone ``sampler2D(...)`` constructions.
+    Strategy: strip declarations, replace sampling calls with vec4(0.5).
     """
-    # Replace  texture(sampler2D(...), ...) → vec4(0.5)
-    # We need balanced-paren matching for the nested sampler2D call.
     max_passes = 20
-    for _ in range(max_passes):
-        m = _re.search(r"\btexture\s*\(\s*sampler2D\s*\(", code)
-        if not m:
-            break
-        # Find the outer texture( opening paren
-        outer_start = code.index("(", m.start())
-        outer_end = _find_matching_paren(code, outer_start)
-        if outer_end == -1:
-            break
-        code = code[:m.start()] + "vec4(0.5)" + code[outer_end + 1:]
 
-    # Remove any remaining standalone sampler2D(...) constructions
+    # ── Strip uniform sampler declarations ──────────────────
+    # e.g. "uniform sampler2D iChannel0;"
+    code = _re.sub(
+        r"^\s*uniform\s+sampler\w*\s+\w+\s*;.*$",
+        "",
+        code,
+        flags=_re.MULTILINE,
+    )
+
+    # ── Strip iChannel0..3 declarations ─────────────────────
+    # Sometimes declared as plain variables too
+    code = _re.sub(
+        r"^\s*(?:uniform\s+)?(?:sampler\w+\s+)?iChannel\d\s*[=;].*$",
+        "",
+        code,
+        flags=_re.MULTILINE,
+    )
+
+    # ── Replace ALL texture sampling functions with vec4(0.5) ──
+    # Covers: texture, textureLod, textureGrad, textureProjLod,
+    # texelFetch, textureProjGrad, textureOffset, etc.
+    _TEX_FUNCS = (
+        "textureLod", "textureGrad", "textureProjLod",
+        "textureProjGrad", "textureOffset", "textureLodOffset",
+        "textureGradOffset", "texelFetch", "texelFetchOffset",
+        "textureProj", "texture",
+    )
+    for func_name in _TEX_FUNCS:
+        for _ in range(max_passes):
+            m = _re.search(r"\b" + func_name + r"\s*\(", code)
+            if not m:
+                break
+            paren_start = code.index("(", m.start())
+            paren_end = _find_matching_paren(code, paren_start)
+            if paren_end == -1:
+                break
+            code = code[:m.start()] + "vec4(0.5)" + code[paren_end + 1:]
+
+    # ── Replace iChannel0..3 references with vec4(0.5) ──────
+    # When used as a sampler argument: texture(iChannel0, uv)
+    # was handled above.  Bare references (rare) get zeroed.
+    code = _re.sub(r"\biChannel\d\b", "vec4(0.5)", code)
+
+    # ── Strip standalone sampler*(...) constructions ─────────
     for _ in range(max_passes):
-        m = _re.search(r"\bsampler2D\s*\(", code)
+        m = _re.search(r"\bsampler\w*\s*\(", code)
         if not m:
             break
         paren_start = code.index("(", m.start())
         paren_end = _find_matching_paren(code, paren_start)
         if paren_end == -1:
             break
-        # Replace with the inner expression (it's likely a channel/unit number)
         inner = code[paren_start + 1:paren_end].strip()
         code = code[:m.start()] + inner + code[paren_end + 1:]
-
-    # Remove any remaining bare texture() calls (no samplers available)
-    # Replace  texture(expr, uv)  →  vec4(0.5)
-    for _ in range(max_passes):
-        m = _re.search(r"\btexture\s*\(", code)
-        if not m:
-            break
-        paren_start = code.index("(", m.start())
-        paren_end = _find_matching_paren(code, paren_start)
-        if paren_end == -1:
-            break
-        code = code[:m.start()] + "vec4(0.5)" + code[paren_end + 1:]
 
     return code
 
@@ -1455,13 +1477,63 @@ End with 1-2 follow-up questions to refine the concept."""
             "- Never use void() as constructor/expression\n"
             "- Never write 'return void;'\n"
             "- Use mod(a, b) not % for floats\n"
-            "- NEVER use texture(), sampler2D, or any sampler types — "
-            "no textures are available. All visuals must be procedural.\n"
+            "- NEVER use texture(), textureLod(), texelFetch(), sampler2D, "
+            "iChannel0-3, or any sampler/texture types — "
+            "no textures available, all visuals must be procedural.\n"
             "- You MUST define void mainImage(out vec4 fragColor, "
             "in vec2 fragCoord) — this is the required entry point.\n\n"
             "Output ONLY GLSL code."
         )
         return await self._call_shader_llm(prompt, temperature=0.85)
+
+    @staticmethod
+    def _trim_compile_error(error: str) -> str:
+        """Collapse verbose GLSL errors before sending to the LLM.
+
+        The GLSL compiler dumps ~20 overload candidates for function
+        mismatch errors (e.g. all 20+ textureLod signatures).  This
+        noise drowns out the actual useful errors.  We keep the first
+        candidate and a count, and cap total lines at 30.
+        """
+        lines = error.splitlines()
+        result: list[str] = []
+        candidates_skipped = 0
+        last_was_candidate = False
+
+        for line in lines:
+            # Lines like "0:43(12): error:    vec4 textureLod(sampler2D..."
+            # are overload candidates — they start with spaces after "error:"
+            is_candidate = bool(
+                _re.match(r"\s*\d+:\d+\(\d+\):\s*error:\s{3,}", line)
+            )
+            if is_candidate:
+                if not last_was_candidate:
+                    # Keep the first candidate line
+                    result.append(line)
+                candidates_skipped += 1
+                last_was_candidate = True
+                continue
+
+            if last_was_candidate and candidates_skipped > 1:
+                result.append(
+                    f"  ... ({candidates_skipped - 1} more overload "
+                    f"candidates omitted)"
+                )
+                candidates_skipped = 0
+            last_was_candidate = False
+            result.append(line)
+
+        if last_was_candidate and candidates_skipped > 1:
+            result.append(
+                f"  ... ({candidates_skipped - 1} more overload "
+                f"candidates omitted)"
+            )
+
+        # Cap at 30 lines total
+        if len(result) > 30:
+            result = result[:28] + [f"... ({len(result) - 28} more lines)"]
+
+        return "\n".join(result)
 
     async def fix_shader(
         self,
@@ -1476,6 +1548,8 @@ End with 1-2 follow-up questions to refine the concept."""
         remembers what it's supposed to depict, and pinpoints the exact
         error location.
         """
+        compile_error = self._trim_compile_error(compile_error)
+
         # ── Extract line numbers from ALL errors ─────────────
         error_lines: list[int] = []
         for m in _re.finditer(r"ERROR:\s*0:(\d+):", compile_error):
@@ -1561,13 +1635,21 @@ End with 1-2 follow-up questions to refine the concept."""
                 "vec3 functions return vec3, etc. Use explicit "
                 "constructors like float(...) or vec3(...).\n\n"
             )
-        elif "opaque type" in error_lower or "sampler2d" in error_lower:
+        elif (
+            "opaque type" in error_lower
+            or "sampler" in error_lower
+            or "ichannel" in error_lower
+            or "texturelod" in error_lower
+            or "texelfetch" in error_lower
+            or "undeclared" in error_lower and "channel" in error_lower
+        ):
             specific_advice = (
-                "ERROR: You used texture() or sampler2D but NO textures "
-                "or samplers are available in this environment. You MUST "
-                "remove ALL texture(), sampler2D, sampler1D, and any "
-                "texture sampling code. Generate all visuals procedurally "
-                "using math — noise functions, SDFs, fractals, etc.\n\n"
+                "ERROR: You used texture/sampler functions but NO textures "
+                "or samplers exist in this environment. REMOVE ALL of: "
+                "texture(), textureLod(), texelFetch(), textureGrad(), "
+                "sampler2D, sampler1D, iChannel0-3, and any texture "
+                "sampling code. Replace with procedural generation — "
+                "noise functions, SDFs, fractals, fbm, etc.\n\n"
             )
         elif "no function with name" in error_lower:
             fn_match = _re.search(
@@ -1603,8 +1685,8 @@ End with 1-2 follow-up questions to refine the concept."""
             "- Use float literals: 1.0 not 1 in constructors\n"
             "- Use mod(a, b) not % for float operands\n"
             "- Define functions ABOVE their first use\n"
-            "- NEVER use texture(), sampler2D, or any sampler types "
-            "— no textures are available\n"
+            "- NEVER use texture(), textureLod(), texelFetch(), sampler2D, "
+            "iChannel0-3 — no textures available\n"
             "- You MUST define void mainImage(out vec4 fragColor, "
             "in vec2 fragCoord) as the entry point\n\n"
             "Output ONLY the complete corrected GLSL code. "
@@ -1651,8 +1733,8 @@ End with 1-2 follow-up questions to refine the concept."""
             "- NEVER write 'return void;' — use 'return;'\n"
             "- Use mod(a, b) not % for float modulo\n"
             "- Define all helper functions ABOVE their first use\n"
-            "- NEVER use texture(), sampler2D, or any sampler/texture types "
-            "— all visuals must be procedural\n"
+            "- NEVER use texture(), textureLod(), texelFetch(), sampler2D, "
+            "iChannel0-3 — no textures, all procedural\n"
             "- You MUST define void mainImage(out vec4 fragColor, "
             "in vec2 fragCoord) as the entry point\n\n"
             "Output ONLY GLSL code. No markdown fences. No explanation."
@@ -1737,6 +1819,7 @@ End with 1-2 follow-up questions to refine the concept."""
         because GLSL compilers often report cascading errors from a
         single root cause.
         """
+        compile_error = self._trim_compile_error(compile_error)
         prompt = (
             f"This GLSL shader was meant to depict: {description}\n\n"
             f"It FAILED to compile with:\n{compile_error}\n\n"

@@ -30,13 +30,26 @@ logger = logging.getLogger(__name__)
 
 @functools.lru_cache(maxsize=1)
 def _has_nvenc() -> bool:
-    """Detect whether h264_nvenc is available in the installed FFmpeg."""
+    """Detect whether h264_nvenc actually works (not just listed).
+
+    FFmpeg may list h264_nvenc but fail at runtime if the Docker
+    container lacks GPU passthrough or the NVIDIA driver doesn't
+    expose the encoder.  We do a real 1-frame test encode to be sure.
+    """
     try:
         result = subprocess.run(
-            ["ffmpeg", "-hide_banner", "-encoders"],
-            capture_output=True, text=True, timeout=5,
+            [
+                "ffmpeg", "-y", "-hide_banner", "-loglevel", "error",
+                "-f", "lavfi", "-i", "color=black:s=64x64:d=0.04",
+                "-c:v", "h264_nvenc", "-f", "null", "-",
+            ],
+            capture_output=True, text=True, timeout=10,
         )
-        return "h264_nvenc" in result.stdout
+        if result.returncode == 0:
+            logger.info("NVENC test encode succeeded — using hardware encoder")
+            return True
+        logger.info("NVENC test encode failed — falling back to libx264")
+        return False
     except Exception:
         return False
 
@@ -745,25 +758,24 @@ class ShaderRenderService:
                 render_spec.global_style.shader_description
                 or "audio-reactive visualization"
             )
+            _MISSING = "missing required entry point"
 
             # ── LLM-based fix pipeline ────────────────────
-            # Use the LLM for ALL semantic fixes rather than
-            # fragile regex heuristics.
 
             # Missing mainImage → LLM ensure_entry_point
-            if "missing required entry point" in compile_err.lower():
+            if _MISSING in compile_err.lower():
                 logger.info("Missing mainImage — LLM ensure_entry_point")
                 fixed = await llm.ensure_entry_point(shader_code, desc)
-                compile_err_new, fixed = await asyncio.to_thread(
+                new_err, fixed = await asyncio.to_thread(
                     self._try_compile, fixed,
                 )
-                if compile_err_new is None:
+                if new_err is None:
                     logger.info("ensure_entry_point fixed shader")
                     shader_code = fixed
                     compile_err = None
                 else:
                     shader_code = fixed
-                    compile_err = compile_err_new
+                    compile_err = new_err
 
             # General errors → LLM validate_shader (full review)
             if compile_err:
@@ -785,6 +797,20 @@ class ShaderRenderService:
                     else:
                         shader_code = reviewed
                         compile_err = rev_err
+
+                # Re-check: validate_shader often fixes syntax but
+                # forgets to include mainImage
+                if compile_err and _MISSING in compile_err.lower():
+                    fixed = await llm.ensure_entry_point(shader_code, desc)
+                    new_err, fixed = await asyncio.to_thread(
+                        self._try_compile, fixed,
+                    )
+                    if new_err is None:
+                        shader_code = fixed
+                        compile_err = None
+                    else:
+                        shader_code = fixed
+                        compile_err = new_err
 
             # Still failing → one targeted fix_shader attempt
             if compile_err:
