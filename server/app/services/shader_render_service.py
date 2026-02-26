@@ -867,6 +867,15 @@ class ShaderRenderService:
             # Wall-clock timer for progress estimation
             render_start_time = _time.monotonic()
 
+            # Pre-import PIL for preview generation (avoid per-frame import cost)
+            try:
+                from PIL import Image as _PILImage
+            except ImportError:
+                _PILImage = None  # type: ignore[assignment]
+
+            # Preview thumbnail dimensions
+            _PREVIEW_W = 480
+
             # Smoothed values (start at resting state)
             s_bass = 0.0
             s_low_mid = 0.0
@@ -937,13 +946,15 @@ class ShaderRenderService:
                 frame = np.flipud(frame)
                 proc.stdin.write(frame.tobytes())
 
-                # ── Progress updates (every ~2 seconds of video time) ──
-                update_interval = max(1, fps * 2)  # every 2s of video
+                # ── Progress + preview updates ────────────────────
+                # Batched: update progress every ~2s of video, save
+                # preview every ~10s.  Keep this FAST — it runs on
+                # the GL render thread.
+                update_interval = max(1, fps * 2)
+                preview_interval = max(1, fps * 10)
+
                 if frame_idx % update_interval == 0:
-                    pct = int(20 + (frame_idx / total_frames) * 75)  # 20-95%
-                    elapsed = frame_idx / fps  # seconds of video rendered
-                    duration_total = total_frames / fps
-                    # Estimate wall-clock time remaining from render speed
+                    pct = int(20 + (frame_idx / total_frames) * 75)
                     now = _time.monotonic()
                     wall_elapsed = now - render_start_time
                     if frame_idx > 0 and wall_elapsed > 0:
@@ -953,7 +964,7 @@ class ShaderRenderService:
                     else:
                         est_remaining = None
 
-                    job_store.update_job(render_id, {
+                    progress_update: dict = {
                         "status": "rendering",
                         "percentage": pct,
                         "message": f"Rendering frame {frame_idx}/{total_frames} ({pct}%)",
@@ -961,31 +972,29 @@ class ShaderRenderService:
                         "total_frames": total_frames,
                         "elapsed_seconds": round(wall_elapsed, 1),
                         "estimated_remaining": round(est_remaining, 1) if est_remaining else None,
-                    })
+                    }
 
-                # ── Save preview frame (every ~5 seconds of video time) ──
-                preview_interval = max(1, fps * 5)
-                if frame_idx % preview_interval == 0 and frame_idx > 0:
-                    try:
-                        preview_dir = Path(settings.storage_path) / "renders" / "previews"
-                        preview_dir.mkdir(parents=True, exist_ok=True)
-                        preview_path = preview_dir / f"{render_id}.jpg"
-                        # Downsample to 480px wide for faster transfer
-                        from PIL import Image
-                        img = Image.fromarray(frame[:, :, :3])  # RGBA → RGB
-                        thumb_w = 480
-                        thumb_h = int(height * thumb_w / width)
-                        img = img.resize((thumb_w, thumb_h), Image.LANCZOS)
-                        img.save(str(preview_path), "JPEG", quality=70)
-                        preview_url = f"/storage/renders/previews/{render_id}.jpg"
-                        job_store.update_job(render_id, {"preview_url": preview_url})
-                    except Exception:
-                        pass  # Preview is best-effort, don't break render
+                    # Save preview thumbnail on a slower cadence
+                    if frame_idx % preview_interval == 0 and frame_idx > 0 and _PILImage is not None:
+                        try:
+                            preview_dir = Path(settings.storage_path) / "renders" / "previews"
+                            preview_dir.mkdir(parents=True, exist_ok=True)
+                            preview_path = preview_dir / f"{render_id}.jpg"
+                            # Fast nearest-neighbor downsample via numpy slicing
+                            step = max(1, width // _PREVIEW_W)
+                            thumb = frame[::step, ::step, :3]  # RGBA→RGB + downsample
+                            img = _PILImage.fromarray(thumb)
+                            img.save(str(preview_path), "JPEG", quality=60)
+                            progress_update["preview_url"] = f"/storage/renders/previews/{render_id}.jpg"
+                        except Exception:
+                            pass  # Preview is best-effort
 
-                # Log progress periodically
+                    job_store.update_job(render_id, progress_update)
+
+                # Log progress every 10s of video
                 if frame_idx % (fps * 10) == 0 and frame_idx > 0:
-                    pct = int(frame_idx / total_frames * 100)
-                    logger.info("Shader render %s: %d%% (%d/%d frames)", render_id, pct, frame_idx, total_frames)
+                    pct_log = int(frame_idx / total_frames * 100)
+                    logger.info("Shader render %s: %d%% (%d/%d frames)", render_id, pct_log, frame_idx, total_frames)
 
         finally:
             # Always release GL resources first (independent of FFmpeg)

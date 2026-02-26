@@ -130,12 +130,18 @@ async def _generate_and_validate(
                 "Final fix still fails: %s", final_err,
             )
 
-    # Return whatever we have — downstream fallback catches it
+    # All LLM attempts exhausted — use a curated fallback shader
+    # that is visually complex (raymarching, fractals, etc.) rather
+    # than returning broken code that either won't compile or would
+    # produce a simple gradient.
     logger.warning(
-        "All shader generation attempts exhausted "
-        "(6 LLM calls)",
+        "All shader generation attempts exhausted (6 LLM calls) — "
+        "using curated fallback shader for '%s'",
+        description[:80],
     )
-    return broken_code
+    from app.services.shader_render_service import pick_fallback_shader
+
+    return pick_fallback_shader(description)
 
 
 class ShaderRequest(BaseModel):
