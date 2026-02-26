@@ -584,6 +584,10 @@ no explanation. Helper functions first, then mainImage. Be ambitious.\
 
 
 # ── Regex patterns for sanitising LLM-generated shader code ──────────
+_RE_MARKDOWN_BLOCK = _re.compile(
+    r"```(?:glsl|hlsl|c|cpp|c\+\+)?\s*\n(.*?)```",
+    _re.DOTALL,
+)
 _RE_MARKDOWN_FENCE = _re.compile(
     r"^```(?:glsl|hlsl|c|cpp)?\s*\n?", _re.MULTILINE,
 )
@@ -994,9 +998,43 @@ def sanitize_shader_code(raw: str) -> str:
     """
     code = raw.strip()
 
-    # ── Strip markdown fences ────────────────────────────────
-    code = _RE_MARKDOWN_FENCE.sub("", code)
-    code = _RE_MARKDOWN_CLOSE.sub("", code)
+    # ── Extract code from markdown fences ─────────────────────
+    # If the LLM wrapped its code in ```glsl ... ```, extract ONLY
+    # the content between the fences and discard surrounding text
+    # (e.g. "Here's your shader:" / "Hope this helps!") which
+    # would cause GLSL compilation errors.
+    fence_blocks = _RE_MARKDOWN_BLOCK.findall(code)
+    if fence_blocks:
+        # Concatenate all fenced code blocks (LLM sometimes splits
+        # code across multiple blocks with commentary in between)
+        code = "\n\n".join(block.strip() for block in fence_blocks)
+    else:
+        # Fallback: strip any stray fence markers
+        code = _RE_MARKDOWN_FENCE.sub("", code)
+        code = _RE_MARKDOWN_CLOSE.sub("", code)
+
+        # Strip leading non-GLSL commentary lines.  The LLM sometimes
+        # outputs "Here's your shader:" before the code.  Drop lines
+        # until we hit something that looks like actual GLSL.
+        _GLSL_START = _re.compile(
+            r"^(?:/[/*]|#|void\b|float\b|vec[234]\b|mat[234]\b"
+            r"|int\b|bool\b|const\b|struct\b|uniform\b|in\b"
+            r"|out\b|layout\b|precision\b|\w+\s+\w+\s*\()",
+        )
+        lines = code.split("\n")
+        first_glsl = 0
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped:
+                continue  # skip blank lines
+            if _GLSL_START.match(stripped):
+                first_glsl = i
+                break
+        if first_glsl > 0:
+            _logger.debug(
+                "Stripped %d leading non-GLSL lines", first_glsl,
+            )
+            code = "\n".join(lines[first_glsl:])
 
     # ── Strip #version directive (wrapper adds it) ───────────
     code = _RE_VERSION.sub("", code)
@@ -1390,6 +1428,18 @@ End with 1-2 follow-up questions to refine the concept."""
                         await asyncio.sleep(2.0)
                         continue
                     return None
+
+                # Log raw response preview for diagnostics when
+                # the response looks like it might have commentary
+                if not raw.lstrip().startswith(("/", "void", "float",
+                        "vec", "mat", "int", "bool", "#",
+                        "const", "struct", "//", "/*")):
+                    logger.info(
+                        "LLM response starts with non-GLSL "
+                        "(first 120 chars): %.120s",
+                        raw,
+                    )
+
                 sanitized = sanitize_shader_code(raw)
                 # Log first 40 lines at INFO so compilation failures
                 # can be diagnosed from server output.
