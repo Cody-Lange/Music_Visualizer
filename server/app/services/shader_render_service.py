@@ -6,6 +6,7 @@ Output is piped as raw RGBA frames into FFmpeg for encoding.
 """
 
 import asyncio
+import functools
 import logging
 import math
 import struct
@@ -25,6 +26,20 @@ from app.config import settings
 from app.models.render import RenderSpec
 
 logger = logging.getLogger(__name__)
+
+
+@functools.lru_cache(maxsize=1)
+def _has_nvenc() -> bool:
+    """Detect whether h264_nvenc is available in the installed FFmpeg."""
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-hide_banner", "-encoders"],
+            capture_output=True, text=True, timeout=5,
+        )
+        return "h264_nvenc" in result.stdout
+    except Exception:
+        return False
+
 
 # The same vertex shader used in the browser ShaderScene
 _VERTEX_SHADER = """\
@@ -876,7 +891,30 @@ class ShaderRenderService:
         vbo = ctx.buffer(vertices)
         vao = ctx.vertex_array(prog, [(vbo, "2f", "in_position")])
 
-        # Set up FFmpeg to receive raw RGBA frames
+        # Set up FFmpeg to receive raw RGBA frames.
+        # - vflip: OpenGL origin is bottom-left; this avoids a per-frame
+        #   np.flipud() in Python which copies the entire framebuffer.
+        # - NVENC: use GPU hardware encoder when available (10x faster
+        #   than libx264 software encoding and the GPU is mostly idle
+        #   between shader renders anyway).
+        use_nvenc = _has_nvenc()
+        if use_nvenc:
+            logger.info("Using h264_nvenc hardware encoder")
+            encode_args = [
+                "-c:v", "h264_nvenc",
+                "-preset", "p4",       # balanced speed/quality
+                "-rc", "vbr",
+                "-cq", "23",
+                "-b:v", "0",
+            ]
+        else:
+            logger.info("NVENC unavailable, using libx264 software encoder")
+            encode_args = [
+                "-c:v", "libx264",
+                "-preset", "fast",
+                "-crf", "21",
+            ]
+
         ffmpeg_cmd = [
             "ffmpeg", "-y",
             "-f", "rawvideo",
@@ -886,9 +924,8 @@ class ShaderRenderService:
             "-r", str(fps),
             "-i", "pipe:0",
             "-i", str(audio_path),
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "21",
+            "-vf", "vflip",
+            *encode_args,
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
             "-b:a", "192k",
@@ -987,11 +1024,11 @@ class ShaderRenderService:
                 ctx.clear(0.0, 0.0, 0.0, 1.0)
                 vao.render(moderngl.TRIANGLE_STRIP)
 
-                # Read pixels and flip vertically (OpenGL origin = bottom-left)
+                # Read pixels — FFmpeg's vflip filter handles the vertical
+                # flip (OpenGL origin = bottom-left), so we write raw
+                # bytes directly without a numpy copy/flip.
                 raw_pixels = fbo.color_attachments[0].read()
-                frame = np.frombuffer(raw_pixels, dtype=np.uint8).reshape(height, width, 4)
-                frame = np.flipud(frame)
-                proc.stdin.write(frame.tobytes())
+                proc.stdin.write(raw_pixels)
 
                 # ── Progress + preview updates ────────────────────
                 if frame_idx % update_interval == 0:
@@ -1014,11 +1051,15 @@ class ShaderRenderService:
                         "estimated_remaining": round(est_remaining, 1) if est_remaining else None,
                     }
 
-                    # Save preview thumbnail on a slower cadence
+                    # Save preview thumbnail on a slower cadence.
+                    # Parse raw_pixels into numpy only for preview frames
+                    # (not every frame — that would undo the perf win).
                     if frame_idx % preview_interval == 0 and frame_idx > 0 and _PILImage is not None:
                         try:
+                            frame_arr = np.frombuffer(raw_pixels, dtype=np.uint8).reshape(height, width, 4)
+                            frame_arr = np.flipud(frame_arr)
                             step = max(1, width // _PREVIEW_W)
-                            thumb = frame[::step, ::step, :3]
+                            thumb = frame_arr[::step, ::step, :3]
                             img = _PILImage.fromarray(thumb)
                             img.save(str(preview_path), "JPEG", quality=60)
                             progress_update["preview_url"] = f"/storage/renders/previews/{render_id}.jpg"
