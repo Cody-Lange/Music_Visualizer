@@ -135,12 +135,21 @@ async def _run_render(
                 lyrics=None,
             )
 
-        job_store.update_job(render_id, {
+        update: dict = {
             "status": "complete",
             "percentage": 100,
             "message": "Complete!",
             "download_url": result.get("download_url"),
-        })
+        }
+        # If the server had to modify the shader (fix pipeline, fallback),
+        # include the actual code so the client can update its preview.
+        if result.get("shader_was_modified"):
+            update["actual_shader_code"] = result.get("actual_shader_code")
+            logger.info(
+                "Render %s used a modified shader — returning actual code to client",
+                render_id,
+            )
+        job_store.update_job(render_id, update)
 
     except Exception as e:
         logger.exception("Render failed: %s", render_id)
@@ -241,7 +250,7 @@ async def get_render_status(render_id: str) -> dict:
     if not job:
         raise HTTPException(status_code=404, detail="Render job not found")
 
-    return {
+    resp: dict = {
         "render_id": render_id,
         "status": job.get("status", "unknown"),
         "percentage": job.get("percentage", 0),
@@ -254,6 +263,12 @@ async def get_render_status(render_id: str) -> dict:
         "download_url": job.get("download_url"),
         "error": job.get("error"),
     }
+    # Include the actual shader code only once (on completion) so the
+    # client can update its preview to match the rendered output.
+    actual = job.get("actual_shader_code")
+    if actual:
+        resp["actual_shader_code"] = actual
+    return resp
 
 
 @router.get("/{render_id}/download")

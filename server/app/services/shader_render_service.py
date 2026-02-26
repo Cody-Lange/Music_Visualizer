@@ -743,7 +743,12 @@ class ShaderRenderService:
         Validates the shader first.  If compilation fails, asks the LLM
         to fix it (up to 3 retries).  Falls back to a curated shader on
         total failure.  The heavy GL + FFmpeg work runs in a thread.
+
+        Returns a dict with ``download_url``, ``output_path``, and
+        ``actual_shader_code`` (the shader that was actually rendered,
+        which may differ from the input if the fix pipeline ran).
         """
+        original_shader = shader_code
         compile_err, shader_code = await asyncio.to_thread(
             self._try_compile, shader_code,
         )
@@ -852,10 +857,20 @@ class ShaderRenderService:
                 )
                 shader_code = pick_fallback_shader(desc)
 
-        return await asyncio.to_thread(
+        shader_was_modified = shader_code != original_shader
+        if shader_was_modified:
+            logger.info(
+                "Shader was modified by fix pipeline for render %s",
+                render_id,
+            )
+
+        result = await asyncio.to_thread(
             self._render_blocking,
             render_id, audio_path, analysis, render_spec, shader_code,
         )
+        result["actual_shader_code"] = shader_code
+        result["shader_was_modified"] = shader_was_modified
+        return result
 
     def _render_blocking(
         self,

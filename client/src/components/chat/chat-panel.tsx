@@ -261,15 +261,31 @@ export function ChatPanel() {
     // Strip useAiKeyframes — it's stored separately on the job
     const { useAiKeyframes: _, ...cleanSpec } = renderSpec as unknown as Record<string, unknown>;
 
-    // Send the preview shader so the server renders the exact same visual
-    const previewShaderCode = useVisualizerStore.getState().customShaderCode;
+    // Wait for any in-progress shader generation to complete before
+    // reading the shader code.  Without this, a race condition causes
+    // the render to use the OLD shader while a new one is still being
+    // generated in the background, leading to preview/render mismatch.
+    const waitForShaderThenSubmit = async () => {
+      const MAX_WAIT_MS = 45_000;
+      const POLL_MS = 250;
+      const start = Date.now();
+      while (useVisualizerStore.getState().isGeneratingShader) {
+        if (Date.now() - start > MAX_WAIT_MS) {
+          console.warn("Timed out waiting for shader generation — using current shader");
+          break;
+        }
+        await new Promise((r) => setTimeout(r, POLL_MS));
+      }
+      return useVisualizerStore.getState().customShaderCode;
+    };
 
     // Submit render job (returns immediately with render_id)
-    fetch("/api/render/start", {
+    waitForShaderThenSubmit()
+    .then((previewShaderCode) => fetch("/api/render/start", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ jobId, renderSpec: cleanSpec, shaderCode: previewShaderCode }),
-    })
+    }))
       .then(async (res) => {
         if (!res.ok) {
           let detail = `HTTP ${res.status}`;
@@ -329,6 +345,12 @@ export function ChatPanel() {
               pollRef.current = null;
               if (status.download_url) {
                 setDownloadUrl(status.download_url);
+              }
+              // If the server had to modify the shader (fix pipeline /
+              // fallback), update the client preview to match the
+              // actual rendered output so there's no visual mismatch.
+              if (status.actual_shader_code) {
+                useVisualizerStore.getState().setCustomShaderCode(status.actual_shader_code);
               }
               setRenderStatus("complete");
               setRenderProgress(100, "Complete!");

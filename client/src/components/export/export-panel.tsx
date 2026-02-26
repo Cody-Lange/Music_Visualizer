@@ -1,8 +1,9 @@
-import { Download, AlertCircle, Loader2 } from "lucide-react";
+import { Download, AlertCircle, Loader2, History } from "lucide-react";
 import { useExportStore } from "@/stores/export-store";
 import { useRenderStore } from "@/stores/render-store";
 import { EXPORT_PRESETS } from "@/types/render";
 import type { ExportPreset } from "@/types/render";
+import type { RenderHistoryEntry } from "@/stores/render-store";
 
 const PRESET_KEYS: ExportPreset[] = [
   "youtube",
@@ -23,6 +24,7 @@ export function ExportPanel() {
   const renderMessage = useRenderStore((s) => s.message);
   const downloadUrl = useRenderStore((s) => s.downloadUrl);
   const renderError = useRenderStore((s) => s.error);
+  const renderHistory = useRenderStore((s) => s.renderHistory);
 
   const isRendering = renderStatus === "queued" || renderStatus === "rendering" || renderStatus === "encoding" || renderStatus === "generating_keyframes";
   const isComplete = renderStatus === "complete";
@@ -110,6 +112,31 @@ export function ExportPanel() {
           <Download size={16} />
           Download MP4
         </a>
+      )}
+
+      {/* Render history — persisted in localStorage */}
+      {renderHistory.length > 0 && (
+        <div>
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <History size={11} className="text-text-secondary" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
+              Previous Renders
+            </span>
+          </div>
+          <div className="space-y-1 max-h-32 overflow-y-auto">
+            {renderHistory.map((entry: RenderHistoryEntry) => (
+              <a
+                key={entry.renderId}
+                href={entry.downloadUrl}
+                download
+                className="flex items-center justify-between rounded px-2 py-1 text-xs text-text-secondary hover:bg-bg-tertiary hover:text-text-primary transition"
+              >
+                <span>{new Date(entry.timestamp).toLocaleString()}</span>
+                <Download size={11} />
+              </a>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );

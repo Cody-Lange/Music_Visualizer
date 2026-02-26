@@ -112,11 +112,18 @@ export function ChatWebSocketProvider({ children }: { children: ReactNode }) {
           if (message.render_spec) {
             useChatStore.getState().setRenderSpec(message.render_spec as any);
 
-            // Only auto-generate shader when we're about to render
-            // (not during editing phase where conversation should
-            // clarify edits before the user explicitly re-renders).
+            // Only auto-generate a shader when the user is still
+            // previewing (refinement / confirmation) AND doesn't already
+            // have one.  During "rendering" phase the user has already
+            // approved what they see in the preview — re-generating
+            // would produce a different shader (LLM non-determinism)
+            // AND race with the render submission, causing the rendered
+            // video to use the old shader while the preview updates to
+            // the new one.  In "editing" phase the user should
+            // explicitly ask for changes before we regenerate.
             const currentPhase = useChatStore.getState().phase;
-            if (currentPhase !== "editing") {
+            const hasShader = !!useVisualizerStore.getState().customShaderCode;
+            if (currentPhase !== "editing" && currentPhase !== "rendering" && !hasShader) {
               const globalStyle = (message.render_spec as any)?.globalStyle;
               const shaderDesc = globalStyle?.shaderDescription;
               if (shaderDesc && typeof shaderDesc === "string") {
